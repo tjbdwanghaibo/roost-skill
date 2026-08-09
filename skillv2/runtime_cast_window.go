@@ -1,0 +1,336 @@
+package skillv2
+
+func (runtime *Runtime) prepareCast(cast *castInstance) error {
+	key := cooldownKey{Caster: cast.cooldownOwner, Skill: cast.program.id}
+	if due := runtime.cooldowns[key]; due > runtime.currentTick {
+		return ErrCooldownActive
+	}
+	cast.startTick = runtime.currentTick
+	if cast.program.cast.mode == castModeCharge {
+		cast.windowStage = CastWindowExecuting
+		cast.pendingRootEvent = "enter"
+		runtime.emitCastLifecycleEvent(cast, "cast_charging")
+		return runtime.executeCast(cast)
+	}
+	return runtime.prepareCastWindow(cast, "enter")
+}
+
+func (runtime *Runtime) prepareCastWindow(cast *castInstance, event string) error {
+	cast.windowStartTick = runtime.currentTick
+	cast.pendingRootEvent = event
+	cast.windowStage = CastWindowPreparing
+	if cast.program.cast.mode == castModeAmmo {
+		state := runtime.ammoState(cast)
+		cast.stock, cast.maxStock = state.stock, state.maxStock
+	}
+	runtime.emitCastLifecycleEvent(cast, "cast_preparing")
+	if !cast.program.cast.refundBeforeCommit {
+		if err := runtime.payCosts(cast); err != nil {
+			return err
+		}
+		cast.costsPaid = true
+	}
+	commitDue := cast.windowStartTick + cast.program.cast.commitTick
+	executeDue := cast.windowStartTick + cast.program.cast.windupTicks
+	if commitDue == runtime.currentTick {
+		if err := runtime.commitCast(cast); err != nil {
+			return err
+		}
+	} else {
+		frame := runtime.retainLocalFrame(cast.locals)
+		if err := runtime.schedule(cast, commitDue, &castCommitTask{CastID: cast.id, PhaseToken: cast.phaseToken, Frame: frame}); err != nil {
+			return err
+		}
+	}
+	if executeDue == runtime.currentTick {
+		return runtime.beginCastExecution(cast)
+	}
+	frame := runtime.retainLocalFrame(cast.locals)
+	return runtime.schedule(cast, executeDue, &castExecuteTask{CastID: cast.id, PhaseToken: cast.phaseToken, Frame: frame})
+}
+
+func (runtime *Runtime) commitCast(cast *castInstance) error {
+	if cast.windowStage == CastWindowCancelled || cast.committed {
+		return nil
+	}
+	if cast.program.cast.mode == castModeAmmo && runtime.ammoState(cast).stock <= 0 {
+		return ErrCastInputRejected
+	}
+	if !cast.costsPaid {
+		if err := runtime.payCosts(cast); err != nil {
+			return err
+		}
+		cast.costsPaid = true
+	}
+	if cast.program.cast.mode == castModeAmmo {
+		state := runtime.ammoState(cast)
+		state.stock--
+		cast.stock, cast.maxStock = state.stock, state.maxStock
+		runtime.ensureAmmoRecharge(cast, state)
+	}
+	cast.committed = true
+	runtime.markAbilityCommitted(cast)
+	runtime.emitCastPresentation(cast)
+	cast.windowStage = CastWindowCommitted
+	if cast.program.cast.mode == castModeTap || cast.program.cast.mode == castModeAmmo || cast.program.cast.mode == castModeCharge {
+		runtime.startCooldown(cast)
+	}
+	runtime.emitCastLifecycleEvent(cast, "cast_committed")
+	return nil
+}
+
+func (runtime *Runtime) startCooldown(cast *castInstance) {
+	if cast.cooldownStarted {
+		return
+	}
+	cast.cooldownStarted = true
+	runtime.cooldowns[cooldownKey{Caster: cast.cooldownOwner, Skill: cast.program.id}] = runtime.currentTick + cast.program.cooldownTicks
+	runtime.emitCastLifecycleEvent(cast, "cast_cooldown_started")
+}
+
+func (runtime *Runtime) beginCastExecution(cast *castInstance) error {
+	if cast.windowStage == CastWindowCancelled {
+		return nil
+	}
+	if !cast.committed {
+		return ErrProgramInvariant
+	}
+	cast.windowStage = CastWindowExecuting
+	cast.status = CastRunning
+	runtime.emitCastLifecycleEvent(cast, "cast_executing")
+	if cast.pendingRootEvent == "release" {
+		return runtime.executeCastEvent(cast, "release")
+	}
+	return runtime.executeCast(cast)
+}
+
+func (runtime *Runtime) beginCastRecovery(cast *castInstance) error {
+	if err := runtime.stopFinishingProcesses(cast); err != nil {
+		_ = runtime.stopProcesses(cast, true)
+		return err
+	}
+	cast.logicalFinished = true
+	cast.windowStage = CastWindowRecovering
+	if err := runtime.handoffEntityProcesses(cast); err != nil {
+		_ = runtime.stopProcesses(cast, true)
+		return err
+	}
+	if cast.pendingTasks > 0 {
+		cast.status = CastSuspended
+		return nil
+	}
+	runtime.emitCastLifecycleEvent(cast, "cast_recovering")
+	if cast.program.cast.recoveryTicks == 0 {
+		return runtime.completeCastRecovery(cast)
+	}
+	frame := runtime.retainLocalFrame(cast.locals)
+	return runtime.schedule(cast, runtime.currentTick+cast.program.cast.recoveryTicks, &castRecoveryTask{CastID: cast.id, PhaseToken: cast.phaseToken, Frame: frame})
+}
+
+func (runtime *Runtime) completeCastRecovery(cast *castInstance) error {
+	if cast.windowStage == CastWindowCancelled {
+		return nil
+	}
+	cast.windowStage = CastWindowComplete
+	cast.status = CastFinished
+	runtime.markAbilityCastFinished(cast)
+	cast.policyActive = false
+	delete(runtime.activePolicies, skillStateKey{Caster: cast.caster, Skill: cast.program.id})
+	runtime.emitCastLifecycleEvent(cast, "cast_complete")
+	return nil
+}
+
+func (runtime *Runtime) emitCastLifecycleEvent(cast *castInstance, kind string) {
+	cast.events = append(cast.events, RuntimeEvent{
+		Tick: runtime.currentTick, Kind: kind, Entity: cast.caster,
+		Context: EventContext{Tick: runtime.currentTick, Source: cast.caster, Owner: cast.caster, Target: cast.primaryTarget, SkillID: cast.program.id, CastID: cast.id},
+	})
+}
+
+func (runtime *Runtime) Cancel(id CastID) error {
+	runtime.mutex.Lock()
+	defer runtime.mutex.Unlock()
+	cast := runtime.casts[id]
+	if cast == nil {
+		return ErrCastInputRejected
+	}
+	if cast.logicalFinished || cast.windowStage == CastWindowRecovering || cast.windowStage == CastWindowComplete || cast.windowStage == CastWindowCancelled {
+		return ErrCastInputRejected
+	}
+	cast.releaseReason = "cancelled"
+	runtime.cancelPhaseTasks(cast, cast.phaseToken)
+	cast.phaseToken++
+	if cast.committed && (cast.program.cast.mode == castModeToggle || cast.program.cast.mode == castModeHold) {
+		runtime.startCooldown(cast)
+	}
+	if operation, found := phaseRootOperation(cast.program, cast.program.phases[cast.currentPhase], "cancel"); found {
+		if _, err := runtime.executeOperation(cast, operation); err != nil {
+			return err
+		}
+	}
+	if err := runtime.stopProcesses(cast, true); err != nil {
+		return err
+	}
+	cast.windowStage = CastWindowCancelled
+	cast.status = CastFinished
+	runtime.markAbilityCastFinished(cast)
+	runtime.emitCastLifecycleEvent(cast, "cast_cancelled")
+	return nil
+}
+
+func (runtime *Runtime) Interrupt(id CastID, tag GameplayTagHandle) error {
+	runtime.mutex.Lock()
+	defer runtime.mutex.Unlock()
+	cast := runtime.casts[id]
+	if cast == nil || !containsGameplayTag(cast.program.cast.interruptTags, tag) {
+		return ErrCastInputRejected
+	}
+	if cast.logicalFinished || cast.windowStage == CastWindowRecovering || cast.windowStage == CastWindowComplete || cast.windowStage == CastWindowCancelled {
+		return ErrCastInputRejected
+	}
+	cast.releaseReason = "cancelled"
+	runtime.cancelPhaseTasks(cast, cast.phaseToken)
+	cast.phaseToken++
+	if cast.committed && (cast.program.cast.mode == castModeToggle || cast.program.cast.mode == castModeHold) {
+		runtime.startCooldown(cast)
+	}
+	if err := runtime.stopProcesses(cast, true); err != nil {
+		return err
+	}
+	cast.windowStage = CastWindowCancelled
+	cast.status = CastFinished
+	runtime.markAbilityCastFinished(cast)
+	runtime.emitCastLifecycleEvent(cast, "cast_interrupted")
+	return nil
+}
+
+func (runtime *Runtime) Release(id CastID) error {
+	runtime.mutex.Lock()
+	defer runtime.mutex.Unlock()
+	cast := runtime.casts[id]
+	if cast == nil {
+		return ErrCastInputRejected
+	}
+	return runtime.releaseCast(cast, "input_release")
+}
+
+func (runtime *Runtime) releaseCast(cast *castInstance, reason string) error {
+	if cast.logicalFinished || cast.windowStage == CastWindowRecovering || cast.windowStage == CastWindowComplete || cast.windowStage == CastWindowCancelled {
+		return ErrCastInputRejected
+	}
+	if cast.program.cast.mode == castModeCharge {
+		chargeBP := runtime.castChargeBP(cast)
+		if chargeBP < cast.program.cast.minChargeBP {
+			cast.releaseReason = "cancelled"
+			cast.policyActive = false
+			delete(runtime.activePolicies, skillStateKey{Caster: cast.caster, Skill: cast.program.id})
+			runtime.cancelPhaseTasks(cast, cast.phaseToken)
+			cast.windowStage = CastWindowCancelled
+			cast.status = CastFinished
+			runtime.markAbilityCastFinished(cast)
+			runtime.emitCastLifecycleEvent(cast, "cast_cancelled")
+			return nil
+		}
+		cast.releaseReason = reason
+		runtime.cancelPhaseTasks(cast, cast.phaseToken)
+		cast.phaseToken++
+		cast.status = CastRunning
+		return runtime.prepareCastWindow(cast, "release")
+	}
+	if cast.program.cast.mode != castModeToggle && cast.program.cast.mode != castModeHold {
+		return ErrCastInputRejected
+	}
+	cast.releaseReason = reason
+	cast.policyActive = false
+	delete(runtime.activePolicies, skillStateKey{Caster: cast.caster, Skill: cast.program.id})
+	runtime.cancelPhaseTasks(cast, cast.phaseToken)
+	cast.phaseToken++
+	runtime.startCooldown(cast)
+	return runtime.executeCastEvent(cast, "release")
+}
+
+func (runtime *Runtime) executeCastEvent(cast *castInstance, event string) error {
+	phase := cast.program.phases[cast.currentPhase]
+	operation, found := phaseRootOperation(cast.program, phase, event)
+	if !found {
+		return ErrProgramInvariant
+	}
+	control, err := runtime.executeOperation(cast, operation)
+	if err != nil {
+		return err
+	}
+	return runtime.resolveControl(cast, control)
+}
+
+func (runtime *Runtime) castChargeBP(cast *castInstance) int64 {
+	maximum := cast.program.cast.maxChargeTicks
+	if maximum <= 0 {
+		return 0
+	}
+	elapsed := runtime.currentTick - cast.startTick
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	if elapsed > maximum {
+		elapsed = maximum
+	}
+	return int64(elapsed) * 10000 / int64(maximum)
+}
+
+func (runtime *Runtime) ammoState(cast *castInstance) *skillState {
+	key := skillStateKey{Caster: cast.caster, Skill: cast.program.id}
+	state := runtime.skillStates[key]
+	if state == nil {
+		state = &skillState{stock: cast.program.cast.initialStock, maxStock: cast.program.cast.maxStock, rechargeTicks: cast.program.cast.rechargeTicks}
+		runtime.skillStates[key] = state
+	}
+	return state
+}
+
+func (runtime *Runtime) ensureAmmoRecharge(cast *castInstance, state *skillState) {
+	if state.rechargeScheduled || state.stock >= state.maxStock {
+		return
+	}
+	state.rechargeScheduled = true
+	state.rechargeGeneration++
+	state.rechargeDue = runtime.currentTick + state.rechargeTicks
+	_ = runtime.scheduleSystem(state.rechargeDue, &ammoRechargeTask{Caster: cast.caster, Skill: cast.program.id, Generation: state.rechargeGeneration})
+}
+
+func (runtime *Runtime) executeAmmoRecharge(task *ammoRechargeTask) error {
+	state := runtime.skillStates[skillStateKey{Caster: task.Caster, Skill: task.Skill}]
+	if state == nil || !state.rechargeScheduled || task.Generation != state.rechargeGeneration || runtime.currentTick != state.rechargeDue {
+		return nil
+	}
+	if state.stock < state.maxStock {
+		state.stock++
+	}
+	if state.stock >= state.maxStock {
+		state.rechargeScheduled = false
+		return nil
+	}
+	state.rechargeDue += state.rechargeTicks
+	return runtime.scheduleSystem(state.rechargeDue, &ammoRechargeTask{Caster: task.Caster, Skill: task.Skill, Generation: task.Generation})
+}
+
+func (runtime *Runtime) CooldownUntil(program *Program, caster EntityID) Tick {
+	runtime.mutex.Lock()
+	defer runtime.mutex.Unlock()
+	if program == nil {
+		return 0
+	}
+	return runtime.cooldowns[cooldownKey{Caster: caster, Skill: program.id}]
+}
+
+func (runtime *Runtime) SkillStock(program *Program, caster EntityID) (int64, int64, bool) {
+	runtime.mutex.Lock()
+	defer runtime.mutex.Unlock()
+	if program == nil || program.cast.mode != castModeAmmo {
+		return 0, 0, false
+	}
+	state := runtime.skillStates[skillStateKey{Caster: caster, Skill: program.id}]
+	if state == nil {
+		return program.cast.initialStock, program.cast.maxStock, true
+	}
+	return state.stock, state.maxStock, true
+}

@@ -1,0 +1,146 @@
+# cube-skill 架构、迁移与同步流程
+
+## 1. 模块边界
+
+依赖方向固定为：
+
+```text
+cube-core/syncstream
+        ^
+        |
+cube-skill/skillsync       cube-kit/syncstream
+        ^                         ^
+        |                         |
+cube-skill/skillv2        cube-core/sync.ISyncBus
+        ^                         ^
+        |                         |
+     game host                 NATS / JetStream
+```
+
+- `cube-core/syncstream`：只有 Observer、Stream、Packet、序号、ACK、有限历史和
+  重同步判定，不知道技能、实体渲染或 NATS。
+- `cube-kit/syncstream`：把 Packet 编码为现有 `sync.SyncMsg`，复用 NATS 或
+  JetStream；不解释技能 Payload。
+- `cube-skill/skillv2`：编译和执行权威技能逻辑，产生不可变 PresentationPlan
+  和有序 PresentationEvent。
+- `cube-skill/skillsync`：定义技能 Manifest、状态全量/增量、表现事件的 JSON
+  记录，并投影成通用 Packet。
+- 具体游戏：实现 `skillv2.Host`、决定 Observer 可见范围、生成状态快照、选择
+  NATS 或 JetStream、处理断线重连。
+
+任何依赖反向指向具体游戏仓库、渲染器或网络实现，都视为边界违规。
+
+## 2. 表现数据与权威状态为什么分流
+
+`RuntimeEvent` 是玩法内部事件，`TraceEvent` 用于诊断和确定性回放，二者都不应
+当作客户端同步协议。新的三条流用途不同：
+
+| Topic | 数据 | 可靠性 | 恢复策略 |
+|---|---|---:|---|
+| `cube.skill.manifest` | Program 的视觉表和挂载计划 | 必须可靠 | 重新发送 Full |
+| `cube.skill.state` | Cast 状态全量或业务增量 | 必须可靠 | 历史连续则 replay，否则 Full |
+| `cube.skill.presentation` | cast/effect 播放指令 | 可丢弃、需有序 | 短历史 replay；过期后以状态为准 |
+
+玩法修改必须先由 Host 成功提交，再产生 effect PresentationEvent。Cast 表现只在
+cast commit 后产生。因此客户端永远不会先看到一个被权威层拒绝的效果。
+
+## 3. 服务端发布流程
+
+1. 编译技能并保存 `InspectIdentity(program)`。
+2. 调用 `InspectPresentationPlan(program)`；按 PresentationDigest 缓存并发布一次
+   Manifest Full Packet。
+3. Runtime 激活或推进后，调用 `PresentationEvents(lastSequence)` 获取新增事件。
+4. 用 `skillsync.Projector` 生成 Packet。
+5. 调用 `syncstream.History.Append` 分配 Observer + Stream 独立序号。
+6. 先保存 History，再交给 `cube-kit/syncstream.Publisher` 发布。
+7. 关键状态变更同时发送 state delta；周期性或重连时发送 state full。
+
+不要直接把 `PresentationEvent.Sequence` 当作网络流序号。它是单 Runtime 事件序号；
+网络序号必须由 `History.Append` 按 Observer + Stream 分配。
+
+## 4. ACK 与重同步
+
+客户端 ACK 的对象是网络 Packet.Sequence：
+
+1. 服务端调用 `History.Acknowledge(observer, stream, sequence)`。
+2. 客户端重连时提交 AfterSequence 与 SchemaVersion。
+3. `History.Resync` 返回连续 Packets 时，按顺序重放。
+4. 返回 `FullRequired=true` 时，根据 Reason 处理：
+   - `history_missing`：首次连接或服务重启，生成 Full；
+   - `history_gap`：历史窗口已经覆盖，生成 Full；
+   - `schema_mismatch`：客户端协议不同，发送兼容 Full 或拒绝升级；
+   - `client_ahead`：客户端串服/回滚，清空客户端游标并发送 Full。
+5. Full Packet 会创建新的恢复锚点；后续 delta 的 BaseSequence 指向它。
+
+## 5. 发布与迁移顺序
+
+这是三个仓库的原子设计变更，但版本发布必须按依赖方向进行：
+
+1. 合并并发布 `cube-core`（包含 `syncstream`）。
+2. `cube-skill` 的 `go.mod` 从本地 replace 改为已发布的 core 版本，发布
+   `cube-skill`。
+3. `cube-kit` 升级 core 版本，发布 transport adapter。
+4. 具体游戏升级 cube-skill/cube-kit，替换旧导入路径：
+
+```text
+github.com/tjbdwanghaibo/cube/game/gameplay/skillv2
+=> github.com/tjbdwanghaibo/cube-skill/skillv2
+
+github.com/tjbdwanghaibo/cube/game/gameplay/skillcompose
+=> github.com/tjbdwanghaibo/cube-skill/skillcompose
+```
+
+本地多仓开发使用 `go work`，不要把临时绝对路径写进代码。
+
+## 6. 测试流程
+
+### 6.1 单模块
+
+```powershell
+go test ./syncstream -count=1                         # cube-core
+go test ./syncstream -count=1                         # cube-kit
+go test ./skillv2 ./skillcompose ./skillsync -count=1 # cube-skill
+```
+
+### 6.2 跨模块工作区
+
+在四个仓库的共同父目录建立不提交的 `go.work`：
+
+```text
+go 1.25.0
+use (
+    ./cube-core
+    ./cube-kit
+    ./cube-skill
+)
+```
+
+然后依次执行：
+
+```powershell
+go test ./...           # cube-core
+go test ./syncstream    # cube-kit adapter
+go test ./...           # cube-skill
+go vet ./...            # 三个模块分别运行
+go test -race ./...     # 三个模块分别运行
+```
+
+### 6.3 必测故障矩阵
+
+- Manifest：同一 Program 输出稳定摘要，返回值不别名 Program 内存。
+- 权威失败：invalid target、资源不足等 expected failure 不产生 effect 表现。
+- 顺序：cast commit 事件先于同 tick 的 effect 事件。
+- 游标：`PresentationEvents(after)` 只返回更大序号。
+- 限制：PresentationLimit 和 History MaxPackets 生效。
+- ACK：重复/倒序 ACK 无副作用，超前 ACK 返回错误。
+- Gap：历史被覆盖后 FullRequired + history_gap。
+- Schema：版本不一致 FullRequired + schema_mismatch。
+- Observer：相同 Topic/Key 的不同 Observer 序号互不污染。
+- Wire：内层 Packet 的 topic/key/sequence 与外层 SyncMsg 不一致时拒绝。
+- Transport：NATS 自消息过滤；JetStream 重试、去重 ID、handler 错误传播。
+
+### 6.4 验收门槛
+
+发布前必须同时满足：所有 fixture、普通测试、vet、race 通过；仓库中不存在旧
+导入路径；cube-core 不导入 cube-skill/cube-kit；cube-skill 不导入具体游戏；
+cube-kit adapter 不导入 skillv2。

@@ -1,0 +1,4 @@
+/.cache/
+/_go-cache/
+*.test
+*.out
