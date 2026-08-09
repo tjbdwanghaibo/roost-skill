@@ -3,6 +3,7 @@ package skillsync
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -157,6 +158,50 @@ func TestCoordinatorRequiresExplicitVisibilityPolicy(t *testing.T) {
 	}
 }
 
+func TestCoordinatorReclaimsViewLocksAndRequiresExplicitReopen(t *testing.T) {
+	projector, _ := NewProjector(1)
+	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Runtime: skillv2.NewRuntime(skillv2.NewMemoryHost(skillv2.AuthorityIdentity{}), skillv2.RuntimeOptions{}),
+		History: syncstream.NewHistory(syncstream.HistoryOptions{}), Publisher: &recordingPublisher{}, Projector: projector, Visibility: AllowAllVisibility{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := syncstream.Observer{ID: 90}
+	for key := int64(1); key <= 100; key++ {
+		if err := coordinator.PublishSnapshot(observer, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	coordinator.mutex.RLock()
+	locks := len(coordinator.viewLocks)
+	coordinator.mutex.RUnlock()
+	if locks != 0 {
+		t.Fatalf("view locks retained = %d", locks)
+	}
+	coordinator.mutex.Lock()
+	coordinator.closingObservers[observer] = struct{}{}
+	coordinator.mutex.Unlock()
+	if err := coordinator.CloseObserver(observer); !errors.Is(err, ErrApplyInProgress) {
+		t.Fatalf("concurrent close error = %v", err)
+	}
+	coordinator.mutex.Lock()
+	delete(coordinator.closingObservers, observer)
+	coordinator.mutex.Unlock()
+	if err := coordinator.CloseObserver(observer); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.PublishSnapshot(observer, 1); !errors.Is(err, ErrObserverClosed) {
+		t.Fatalf("closed error = %v", err)
+	}
+	if err := coordinator.OpenObserver(observer); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.PublishSnapshot(observer, 1); err != nil {
+		t.Fatal(err)
+	}
+}
+
 type reentrantStateConsumer struct {
 	applier *Applier
 	stream  syncstream.Stream
@@ -296,6 +341,43 @@ func TestEntityVisibilityPolicyRedactsNestedTargets(t *testing.T) {
 	}
 }
 
+func TestEntityVisibilityPolicyDefaultDenyAndRecursiveValueRedaction(t *testing.T) {
+	policy := EntityVisibilityPolicy{
+		Visible:           func(_ syncstream.Observer, entity skillv2.EntityID) (bool, error) { return entity != 99, nil },
+		DefaultDenyFields: true,
+		RedactSpatial:     true,
+		FieldVisible: func(_ syncstream.Observer, field VisibilityField, _ string) (bool, error) {
+			switch field {
+			case VisibilityPersistentState, VisibilityPersistentValue, VisibilityProcesses, VisibilityPresentation:
+				return true, nil
+			default:
+				return false, nil
+			}
+		},
+	}
+	snapshot := skillv2.RuntimeStateSnapshot{
+		Casts:            []skillv2.CastStateSnapshot{{ID: 1, Caster: 1}},
+		Processes:        []skillv2.ProcessStateSnapshot{{ID: 1, Owner: 1, Motion: skillv2.MotionState{Position: skillv2.Position{X: 10}, CarryTarget: 99}}},
+		PersistentStates: []skillv2.PersistentStateSnapshot{{Handle: skillv2.StateHandle{GameplayDigest: "g", Slot: 1}, Binding: skillv2.StateScopeBinding{Owner: 1}, Value: skillv2.EntityListRuntimeValue([]skillv2.EntityID{1, 99})}},
+	}
+	filtered, err := policy.FilterStateSnapshot(syncstream.Observer{}, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered.Casts) != 0 || len(filtered.Processes) != 1 || filtered.Processes[0].Motion.Position != (skillv2.Position{}) || filtered.Processes[0].Motion.CarryTarget != 0 {
+		t.Fatalf("filtered process = %#v", filtered)
+	}
+	entities, ok := filtered.PersistentStates[0].Value.Entities()
+	if !ok || len(entities) != 1 || entities[0] != 1 {
+		t.Fatalf("persistent entities = %v, %v", entities, ok)
+	}
+	event := skillv2.PresentationEvent{Anchor: skillv2.PresentationAnchor{Source: 1, Position: &skillv2.Position{X: 5}, Path: []skillv2.Position{{X: 6}}}}
+	redacted, allowed, err := policy.FilterPresentation(syncstream.Observer{}, event)
+	if err != nil || !allowed || redacted.Anchor.Position != nil || redacted.Anchor.Path != nil {
+		t.Fatalf("event=%#v allowed=%v err=%v", redacted, allowed, err)
+	}
+}
+
 func TestFileOutboxSurvivesRestartAndDeletesOnAck(t *testing.T) {
 	store, err := NewFileOutboxStore(t.TempDir())
 	if err != nil {
@@ -322,5 +404,122 @@ func TestFileOutboxSurvivesRestartAndDeletesOnAck(t *testing.T) {
 	third, err := NewOutbox(OutboxOptions{Store: store, RequireDurable: true})
 	if err != nil || third.Metrics().Pending != 0 {
 		t.Fatalf("pending=%d err=%v", third.Metrics().Pending, err)
+	}
+}
+
+func TestOutboxEnforcesHardCapacityAndPersistedAge(t *testing.T) {
+	box, err := NewOutbox(OutboxOptions{MaxPendingPackets: 1, MaxPendingBytes: 1 << 20, MaxPendingPerStream: 1, MaxPendingAge: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := syncstream.Packet{Observer: syncstream.Observer{ID: 1}, Stream: syncstream.Stream{Topic: TopicState, Key: 1}, Epoch: 1, Sequence: 1}
+	if err := box.Put(first); err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	second.Stream.Key, second.Sequence = 2, 2
+	if err := box.Put(second); !errors.Is(err, ErrOutboxCapacityExceeded) {
+		t.Fatalf("capacity error = %v", err)
+	}
+	metrics := box.Metrics()
+	if metrics.Pending != 1 || metrics.PendingBytes == 0 {
+		t.Fatalf("metrics = %#v", metrics)
+	}
+
+	store, err := NewFileOutboxStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRecord(OutboxRecord{Packet: first, CreatedAt: time.Now().Add(-2 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewOutbox(OutboxOptions{Store: store, RequireDurable: true, MaxPendingAge: time.Hour}); !errors.Is(err, ErrOutboxPendingTooOld) {
+		t.Fatalf("stale recovery error = %v", err)
+	}
+}
+
+func TestFileOutboxRejectsChecksumAndIdentityCorruption(t *testing.T) {
+	directory := t.TempDir()
+	store, err := NewFileOutboxStore(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	packet := syncstream.Packet{Observer: syncstream.Observer{ID: 4}, Stream: syncstream.Stream{Topic: TopicState, Key: 2}, Epoch: 3, Sequence: 1, Payload: []byte("state")}
+	if err := store.Put(packet); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("entries=%d err=%v", len(entries), err)
+	}
+	path := directory + string(os.PathSeparator) + entries[0].Name()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope fileOutboxEnvelope
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	envelope.Checksum = "00"
+	data, err = json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadRecords(); !errors.Is(err, ErrRecordInvalid) {
+		t.Fatalf("corrupt load=%v", err)
+	}
+}
+
+type failingBatchDeleteStore struct {
+	records []OutboxRecord
+	err     error
+}
+
+func (store *failingBatchDeleteStore) Load() ([]syncstream.Packet, error) {
+	result := make([]syncstream.Packet, len(store.records))
+	for index := range store.records {
+		result[index] = store.records[index].Packet.Clone()
+	}
+	return result, nil
+}
+func (store *failingBatchDeleteStore) LoadRecords() ([]OutboxRecord, error) {
+	return append([]OutboxRecord(nil), store.records...), nil
+}
+func (store *failingBatchDeleteStore) Put(packet syncstream.Packet) error {
+	return store.PutRecord(OutboxRecord{Packet: packet, CreatedAt: time.Now()})
+}
+func (store *failingBatchDeleteStore) PutRecord(record OutboxRecord) error {
+	store.records = append(store.records, record)
+	return nil
+}
+func (*failingBatchDeleteStore) Delete(syncstream.Observer, syncstream.Stream, uint64, uint64) error {
+	return nil
+}
+func (store *failingBatchDeleteStore) DeleteBatch([]OutboxDelete) error { return store.err }
+
+func TestOutboxBatchDeleteFailureDoesNotPartiallyAcknowledge(t *testing.T) {
+	injected := errors.New("injected batch delete failure")
+	store := &failingBatchDeleteStore{err: injected}
+	box, err := NewOutbox(OutboxOptions{Store: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := syncstream.Observer{ID: 8}
+	stream := syncstream.Stream{Topic: TopicState, Key: 9}
+	if err := box.PutBatch([]syncstream.Packet{
+		{Observer: observer, Stream: stream, Epoch: 1, Sequence: 1},
+		{Observer: observer, Stream: stream, Epoch: 1, Sequence: 2},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := box.Acknowledge(observer, stream, 1, 2); !errors.Is(err, injected) {
+		t.Fatalf("ack=%v", err)
+	}
+	if metrics := box.Metrics(); metrics.Pending != 2 || metrics.Acknowledged != 0 {
+		t.Fatalf("metrics=%#v", metrics)
 	}
 }

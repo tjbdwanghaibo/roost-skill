@@ -162,6 +162,7 @@ func (runtime *Runtime) StateEvents(after uint64, limit int) StateEventBatch {
 	batch := StateEventBatch{LatestSequence: runtime.stateEventSequence, Dropped: runtime.stateEventDropped}
 	if len(runtime.stateEvents) == 0 {
 		batch.OldestSequence = runtime.stateEventSequence + 1
+		batch.CursorExpired = after < runtime.stateEventSequence
 		return batch
 	}
 	batch.OldestSequence = runtime.stateEvents[0].Sequence
@@ -190,7 +191,6 @@ func cloneStateEvents(events []StateEvent) []StateEvent {
 func (runtime *Runtime) StateSnapshot() RuntimeStateSnapshot {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
-	runtime.refreshStateMutationsLocked()
 	return runtime.stateSnapshotLocked()
 }
 

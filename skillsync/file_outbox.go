@@ -1,6 +1,7 @@
 package skillsync
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,9 +10,18 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/tjbdwanghaibo/cube-core/syncstream"
 )
+
+const fileOutboxVersion uint32 = 1
+
+type fileOutboxEnvelope struct {
+	Version  uint32       `json:"version"`
+	Record   OutboxRecord `json:"record"`
+	Checksum string       `json:"checksum"`
+}
 
 // FileOutboxStore persists one immutable file per network packet. Atomic rename
 // makes Put crash-safe and idempotent without a database dependency.
@@ -35,13 +45,25 @@ func NewFileOutboxStore(directory string) (*FileOutboxStore, error) {
 }
 
 func (store *FileOutboxStore) Load() ([]syncstream.Packet, error) {
+	records, err := store.LoadRecords()
+	if err != nil {
+		return nil, err
+	}
+	packets := make([]syncstream.Packet, len(records))
+	for index := range records {
+		packets[index] = records[index].Packet.Clone()
+	}
+	return packets, nil
+}
+
+func (store *FileOutboxStore) LoadRecords() ([]OutboxRecord, error) {
 	store.mutex.Lock()
 	defer store.mutex.Unlock()
 	entries, err := os.ReadDir(store.directory)
 	if err != nil {
 		return nil, err
 	}
-	packets := make([]syncstream.Packet, 0)
+	records := make([]OutboxRecord, 0)
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".packet" {
 			continue
@@ -50,31 +72,47 @@ func (store *FileOutboxStore) Load() ([]syncstream.Packet, error) {
 		if err != nil {
 			return nil, err
 		}
-		var packet syncstream.Packet
-		if err := json.Unmarshal(data, &packet); err != nil {
+		record, err := decodeFileOutboxRecord(data)
+		if err != nil {
 			return nil, err
 		}
-		packets = append(packets, packet)
+		if outboxFilename(record.Packet.Observer, record.Packet.Stream, record.Packet.Epoch, record.Packet.Sequence) != entry.Name() {
+			return nil, ErrRecordInvalid
+		}
+		records = append(records, record)
 	}
-	sort.Slice(packets, func(i, j int) bool {
-		if packets[i].Stream.Topic != packets[j].Stream.Topic {
-			return packets[i].Stream.Topic < packets[j].Stream.Topic
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].Packet.Stream.Topic != records[j].Packet.Stream.Topic {
+			return records[i].Packet.Stream.Topic < records[j].Packet.Stream.Topic
 		}
-		if packets[i].Stream.Key != packets[j].Stream.Key {
-			return packets[i].Stream.Key < packets[j].Stream.Key
+		if records[i].Packet.Stream.Key != records[j].Packet.Stream.Key {
+			return records[i].Packet.Stream.Key < records[j].Packet.Stream.Key
 		}
-		return packets[i].Sequence < packets[j].Sequence
+		return records[i].Packet.Sequence < records[j].Packet.Sequence
 	})
-	return packets, nil
+	return records, nil
 }
 
 func (store *FileOutboxStore) Put(packet syncstream.Packet) error {
-	data, err := json.Marshal(packet)
+	return store.PutRecord(OutboxRecord{Packet: packet.Clone(), CreatedAt: time.Now()})
+}
+
+func (store *FileOutboxStore) PutRecord(record OutboxRecord) error {
+	if record.CreatedAt.IsZero() {
+		record.CreatedAt = time.Now()
+	}
+	recordData, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256(recordData)
+	data, err := json.Marshal(fileOutboxEnvelope{Version: fileOutboxVersion, Record: record, Checksum: hex.EncodeToString(digest[:])})
 	if err != nil {
 		return err
 	}
 	store.mutex.Lock()
 	defer store.mutex.Unlock()
+	packet := record.Packet
 	target := filepath.Join(store.directory, outboxFilename(packet.Observer, packet.Stream, packet.Epoch, packet.Sequence))
 	if _, err := os.Stat(target); err == nil {
 		return nil
@@ -112,6 +150,40 @@ func (store *FileOutboxStore) Put(packet syncstream.Packet) error {
 	}
 	remove = false
 	return nil
+}
+
+func decodeFileOutboxRecord(data []byte) (OutboxRecord, error) {
+	var shape map[string]json.RawMessage
+	if err := json.Unmarshal(data, &shape); err != nil {
+		return OutboxRecord{}, err
+	}
+	if _, ok := shape["version"]; ok {
+		var envelope fileOutboxEnvelope
+		if err := decodeStrict(data, &envelope); err != nil || envelope.Version != fileOutboxVersion {
+			return OutboxRecord{}, ErrRecordInvalid
+		}
+		recordData, err := json.Marshal(envelope.Record)
+		if err != nil {
+			return OutboxRecord{}, err
+		}
+		digest := sha256.Sum256(recordData)
+		if !bytes.Equal([]byte(envelope.Checksum), []byte(hex.EncodeToString(digest[:]))) {
+			return OutboxRecord{}, ErrRecordInvalid
+		}
+		return envelope.Record, nil
+	}
+	if _, ok := shape["packet"]; ok { // pre-envelope record format
+		var record OutboxRecord
+		if err := decodeStrict(data, &record); err != nil {
+			return OutboxRecord{}, err
+		}
+		return record, nil
+	}
+	var packet syncstream.Packet // original packet-only format
+	if err := decodeStrict(data, &packet); err != nil {
+		return OutboxRecord{}, err
+	}
+	return OutboxRecord{Packet: packet, CreatedAt: time.Now()}, nil
 }
 
 func (store *FileOutboxStore) Delete(observer syncstream.Observer, stream syncstream.Stream, epoch, sequence uint64) error {

@@ -478,6 +478,8 @@ func (runtime *Runtime) terminateOwnedProcess(cast *castInstance, id ProcessID, 
 func (runtime *Runtime) RemoveProgram(programID string) error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
+	runtime.beginStateMutationLocked()
+	defer runtime.commitStateMutationsLocked()
 	ids := make([]ProcessID, 0)
 	for id, process := range runtime.processes {
 		if process.Program != nil && process.Program.id == programID {
@@ -514,6 +516,8 @@ func (runtime *Runtime) RemoveProgram(programID string) error {
 func (runtime *Runtime) Shutdown() error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
+	runtime.beginStateMutationLocked()
+	defer runtime.commitStateMutationsLocked()
 	ids := make([]ProcessID, 0, len(runtime.processes))
 	for id, process := range runtime.processes {
 		if process.Status == ProcessRunning {

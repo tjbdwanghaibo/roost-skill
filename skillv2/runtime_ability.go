@@ -87,6 +87,8 @@ func (runtime *Runtime) executeAbilityStateMutation(cast *castInstance, operatio
 func (runtime *Runtime) RegisterAbility(registration AbilityRegistration) error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
+	runtime.beginStateMutationLocked()
+	defer runtime.commitStateMutationsLocked()
 	if registration.Owner == 0 || registration.Handle == 0 || registration.Slot < 0 || registration.Program == nil || runtime.host == nil || registration.Program.compilerSemanticsRevision != runtime.options.SupportedCompilerSemanticsRevision || !authorityMatches(registration.Program.authority, runtime.host.AuthorityIdentity()) {
 		return ErrCastInputInvalid
 	}
@@ -264,6 +266,8 @@ func (runtime *Runtime) readAbilityStateLocked(owner EntityID, ability AbilityHa
 func (runtime *Runtime) ModifyAbilityState(owner EntityID, ability AbilityHandle, property, operation string, value RuntimeValue, duration Tick, event EventContext) (AbilityChangeResult, error) {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
+	runtime.beginStateMutationLocked()
+	defer runtime.commitStateMutationsLocked()
 	return runtime.modifyAbilityStateLocked(owner, ability, property, operation, value, duration, event)
 }
 

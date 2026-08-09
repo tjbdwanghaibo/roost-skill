@@ -302,5 +302,151 @@ Host command/result 和 revision。这样通常不需要在整条链路中盲目
 4. 运行 `integration/sync-e2e`，沿调用栈观察确认失败、磁盘恢复、分片重组、Applier 和 ACK
    清理。这个测试是三仓边界是否真正契合的最终阅读入口。
 
+## 11. 生产化增量：从写入到恢复的完整闭环
+
+这一轮实现把 Visual 与 Sync 从“功能可用”推进到“进程可重启、容量可证明、访问默认
+拒绝”。建议按下面的因果顺序阅读，而不是按文件名字母顺序阅读。
+
+### 11.1 写时提交 authoritative mutation
+
+先读 `runtime_mutation.go` 的 `beginStateMutationLocked` 与
+`commitStateMutationsLocked`，再搜索所有调用点。每个公开写入口都遵守同一个临界区模板：
+
+```go
+runtime.mutex.Lock()
+defer runtime.mutex.Unlock()
+runtime.beginStateMutationLocked()
+defer runtime.commitStateMutationsLocked()
+```
+
+因此写方法返回时，canonical `StateMutation` 已产生；`StateDeltas` 和 `StateSnapshot`
+只是读取，不再在 flush/read 路径扫描整个 Runtime。直接修改外部扩展状态的 Host 必须调用
+`CaptureExternalState` 建立明确提交边界。学习时运行
+`TestStateMutationsAreCommittedBeforeWriteReturns`，并尝试在一次写入后连续读取两次 delta，
+确认第二次读取不会产生隐式新 mutation。
+
+### 11.2 Runtime checkpoint/restore
+
+入口是 `runtime_checkpoint.go`：
+
+- `Runtime.Checkpoint()` 在 Runtime 锁内生成稳定排序的权威镜像；
+- `RuntimeCheckpoint` 带格式版本、payload 和 SHA-256；
+- `RestoreRuntime` 严格拒绝未知字段、尾随数据、超大 payload、checksum 错误；
+- Host 的 `CurrentRevision` 与 `AuthorityIdentity` 必须和镜像完全一致；
+- `ProgramResolver` 返回的 Program 必须同时匹配 id、gameplay digest、compiler semantics
+  和 authority；
+- cast/process、frame、scheduler heap、随机调用计数、cooldown、ammo、policy、proc ledger、
+  ability overlay 及所有递增 ID 都会恢复；
+- trace、presentation queue、state delivery queue 属于观察/投递状态，不进入 gameplay 镜像；
+  恢复后消费者先取 full state/presentation snapshot。
+
+正确恢复顺序是：先恢复同一修订的世界 Host（数据库或世界快照），再装载所有被引用的
+immutable Program，最后调用 `RestoreRuntime`，成功后才开放流量。任何一步不匹配都不能
+“尽量恢复”。阅读 `TestRuntimeCheckpointRestoresActiveTimelineDeterministically`，它在施法
+窗口中途保存，恢复后分别推进到 commit/execute/recovery，逐点比较权威 Host 状态。
+
+### 11.3 VisualPlanCache 的两级引用模型
+
+`presentation_asset_cache.go` 现在有两层生命周期：plan entry 引用一组 asset key，全局
+asset entry 持有 preload 状态和引用数。不同 Program 使用相同 asset key 时只加载一次；
+最后一个 plan 释放才 unload。相同 key 若对应不同 descriptor/fallback，会返回
+`ErrVisualAssetCollision`，避免错误内容被缓存命中。
+
+缓存命中时会在释放全局锁之前预留 plan 引用，避免“Acquire 正要返回、旧 lease 同时把资源
+unload”的窗口。不同 primary key 若最终落到同一个 fallback key，也通过 alias 引用同一个
+全局 fallback entry，不会重复加载或提前卸载。
+
+`InvalidateCatalog` 先对整批目标做 preflight，再统一变更；只要有一个 plan 正在引用、加载
+未完成或目录 digest 冲突，整次失效不产生部分结果。重点测试：共享资产最后引用释放、并发
+加载、目录原子失效、digest collision。
+
+### 11.4 Visibility 是封闭字段集合，不是补丁式过滤
+
+`skillsync/visibility.go` 的 `VisibilityField` 是当前可同步字段的封闭枚举。构造快照时逐组
+拷贝，而不是先浅拷贝再删字段，因此未来新增 Runtime 字段默认不可见。`DefaultDenyFields`
+开启后，调用方必须通过 `FieldVisible(observer, field, handle)` 明确放行。
+
+嵌套 `RuntimeValue` 使用 `RedactRuntimeValue` 递归处理 entity、entity list、hit、ability、
+status、effect-result 等引用；不可见标量变为同类型 missing，列表过滤不可见成员。空间信息
+可以单独用 `RedactSpatial` 清除 motion、position/path/direction，opaque token 用
+`RedactOpaque` 控制。可见性 evaluator 返回错误时 Coordinator fail-closed，并记录失败。
+
+### 11.5 Outbox、observer 与 schema 的有界生命周期
+
+`skillsync/outbox.go` 同时限制全局 packet 数、JSON 字节数、每 observer/stream/epoch 数量和
+最老 pending age。限制也会在重启装载时执行，不能靠重启绕过。`PutBatch` 先去重并整体
+预检，持久化全部成功后才更新内存；ACK 批量删除失败时内存保持不变。
+
+`file_outbox.go` 的新记录带版本与 checksum，文件名由 packet identity 派生。启动时同时
+验证 JSON 结构、checksum、文件名身份和 Packet 基本不变量；保留对旧 record/packet-only
+文件的只读迁移兼容。生产监控至少告警 `PendingBytes` 和 `OldestPendingAge`。
+
+Coordinator 的 observer/key 锁使用引用计数，最后调用者退出即回收。`CloseObserver` 先把
+observer 标为 closed，再按稳定顺序取得其所有 view 锁并清理 history/outbox/cursor；关闭
+后发布会返回 `ErrObserverClosed`，只有显式 `OpenObserver` 才能重新接入，防止迟到 goroutine
+复活旧 session。
+
+`skillsync.SchemaRegistry` 是有向迁移图：`Register` 添加单步迁移，`MigrationPath` 选择确定性
+最短链，`Seal` 在启动完成后冻结配置。Applier 可直接把 registry 作为 `SchemaMigrator`；每步
+函数收到携带当前 source version 的 Packet，nil payload、缺失路径、重复边和 sealed 后修改
+都会明确失败。Schema 切换仍必须由 full packet 建立新链，迁移器不改变网络序列语义。
+
+## 12. 新实现的详细测试流程
+
+### 12.1 开发内环
+
+```powershell
+# 修改 checkpoint/runtime
+go test ./skillv2 -run 'TestRuntimeCheckpoint|TestStateMutations' -count=1
+
+# 修改 visibility/outbox/schema/coordinator
+go test ./skillsync -run 'Test(RuntimeVisibility|Outbox|FileOutbox|SchemaRegistry|CoordinatorReclaims)' -count=1
+
+# 包级回归
+go test ./skillv2 ./skillcompose ./skillsync -count=1
+go vet ./skillv2 ./skillcompose ./skillsync
+```
+
+### 12.2 恢复与故障注入
+
+逐项执行并保留日志/指标证据：
+
+1. 在 preparing、committed、process running 三类时点 checkpoint，恢复后推进相同 tick，比较
+   StateSnapshot、Host 结果和后续 checkpoint payload；
+2. 修改 checkpoint version、payload、checksum、Host revision、authority 和 Program digest，
+   每项必须在返回 Runtime 前失败；
+3. 截断、篡改、重命名 `.packet` 文件，Outbox 启动必须失败且不得忽略坏文件；
+4. 注入 batch delete/store write 失败，确认 pending/ACK 指标和内存集合不发生部分提交；
+5. 填满 packet/byte/per-stream 任一上限，下一次 Put 必须返回
+   `ErrOutboxCapacityExceeded`；构造过龄记录必须返回 `ErrOutboxPendingTooOld`；
+6. 构造 1→2→4 与 1→3→5→4，确认 registry 永远选择前者；删除边、返回 nil、seal 后注册均
+   必须失败；
+7. 并发 publish/close/reopen，同一 closed observer 不得被迟到发布复活，最终 view lock 数为 0；
+8. 两个 plan 共享 asset，逐个释放，只有最后一次释放发生 unload；目录失效任一目标忙时全批
+   不变；
+9. 用 nested effect-result/entity-list 覆盖 visibility，确认未显式列出的新字段默认不出现在
+   observer snapshot/delta。
+
+### 12.3 发布门槛
+
+```powershell
+go test ./... -count=1
+go vet ./...
+go test -race ./... -count=1
+go test ./skillv2 -run TestAllFixturesParseCompileInspectAndRun -count=1
+go test -run=^$ -fuzz=FuzzParseGeneratedNeverPanics -fuzztime=30s ./skillv2
+
+cd integration/sync-e2e
+go test ./... -count=1
+$env:CUBE_SYNC_SOAK='1'
+$env:CUBE_SYNC_SOAK_DURATION='30m'
+go test ./... -run TestProtocolSoak -count=1 -timeout 35m
+```
+
+还要在与生产一致的 broker、文件系统和数据库上跑一次：真实确认发布、进程 kill -9、WAL
+恢复、Outbox 重放、客户端 ACK、历史裁剪、Runtime checkpoint 恢复。普通内存总线测试不能
+替代这一步。验收标准是无数据缺口、无重复业务提交、无 observer 串流、无无限增长，且所有
+失败都映射到已配置告警。
+
 完整生产接入、发布与故障注入流程见
 [Visual 与数据同步生产指南](visual-sync-production-guide.md)。

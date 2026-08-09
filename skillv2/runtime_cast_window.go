@@ -150,6 +150,8 @@ func (runtime *Runtime) emitCastLifecycleEvent(cast *castInstance, kind string) 
 func (runtime *Runtime) Cancel(id CastID) error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
+	runtime.beginStateMutationLocked()
+	defer runtime.commitStateMutationsLocked()
 	cast := runtime.casts[id]
 	if cast == nil {
 		return ErrCastInputRejected
@@ -181,6 +183,8 @@ func (runtime *Runtime) Cancel(id CastID) error {
 func (runtime *Runtime) Interrupt(id CastID, tag GameplayTagHandle) error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
+	runtime.beginStateMutationLocked()
+	defer runtime.commitStateMutationsLocked()
 	cast := runtime.casts[id]
 	if cast == nil || !containsGameplayTag(cast.program.cast.interruptTags, tag) {
 		return ErrCastInputRejected
@@ -207,6 +211,8 @@ func (runtime *Runtime) Interrupt(id CastID, tag GameplayTagHandle) error {
 func (runtime *Runtime) Release(id CastID) error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
+	runtime.beginStateMutationLocked()
+	defer runtime.commitStateMutationsLocked()
 	cast := runtime.casts[id]
 	if cast == nil {
 		return ErrCastInputRejected

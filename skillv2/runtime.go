@@ -197,6 +197,7 @@ type Runtime struct {
 	stateMutationDropped    uint64
 	stateMutationBaseline   RuntimeStateSnapshot
 	stateMutationReady      bool
+	stateMutationDirty      bool
 }
 
 func NewRuntime(host Host, options RuntimeOptions) *Runtime {
@@ -255,6 +256,8 @@ func (runtime *Runtime) Activate(program *Program, input CastInput) (CastID, err
 func (runtime *Runtime) Start(program *Program, input CastInput) (CastID, error) {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
+	runtime.beginStateMutationLocked()
+	defer runtime.commitStateMutationsLocked()
 	return runtime.startLocked(program, input, nil)
 }
 

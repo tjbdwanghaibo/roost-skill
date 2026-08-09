@@ -1,6 +1,8 @@
 package skillv2
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"sort"
 	"testing"
@@ -35,6 +37,7 @@ func TestAllFixturesParseCompileInspectAndRun(t *testing.T) {
 				if err := runtime.Advance(0); err != nil {
 					t.Fatal(err)
 				}
+				assertRuntimeCheckpointRoundTrip(t, runtime, host, program)
 				return
 			}
 			castID, err := runtime.Activate(program, test.input)
@@ -55,7 +58,48 @@ func TestAllFixturesParseCompileInspectAndRun(t *testing.T) {
 			if !found || cast.Status != test.expectedCast {
 				t.Fatalf("cast = %#v, found=%v, want %s", cast, found, test.expectedCast)
 			}
+			assertRuntimeCheckpointRoundTrip(t, runtime, host, program)
 		})
+	}
+}
+
+func assertRuntimeCheckpointRoundTrip(t *testing.T, runtime *Runtime, host Host, program *Program) {
+	t.Helper()
+	checkpoint, err := runtime.Checkpoint()
+	if err != nil {
+		runtime.mutex.Lock()
+		processes, owned := len(runtime.processes), len(runtime.ownedProcesses)
+		processPrograms := make(map[ProcessID]bool, len(runtime.processes))
+		for id, process := range runtime.processes {
+			processPrograms[id] = process != nil && process.Program != nil
+		}
+		tasks := append(taskHeap(nil), runtime.scheduler.tasks...)
+		baseline, _ := json.Marshal(runtime.stateMutationBaseline)
+		current, _ := json.Marshal(runtime.stateSnapshotLocked())
+		runtime.mutex.Unlock()
+		t.Fatalf("%v; processes=%d owned=%d programs=%v tasks=%+v\nbaseline=%s\ncurrent=%s", err, processes, owned, processPrograms, tasks, baseline, current)
+	}
+	restored, err := RestoreRuntime(host, RuntimeOptions{}, checkpoint, ProgramResolverFunc(func(id, digest string) (*Program, error) {
+		if id == program.id && digest == program.identity.gameplayDigest {
+			return program, nil
+		}
+		return nil, ErrCheckpointProgram
+	}))
+	if err != nil {
+		var payload runtimeCheckpointPayload
+		_ = json.Unmarshal(checkpoint.Payload, &payload)
+		t.Fatalf("%v; tasks=%+v", err, payload.Tasks)
+	}
+	want, err := json.Marshal(runtime.StateSnapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := json.Marshal(restored.StateSnapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("checkpoint snapshot mismatch\nwant=%s\ngot=%s", want, got)
 	}
 }
 

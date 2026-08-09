@@ -7,6 +7,8 @@ const normalizedDirectionScale int64 = 10000
 func (runtime *Runtime) Input(castID CastID, port InputPort, input InputPayload) error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
+	runtime.beginStateMutationLocked()
+	defer runtime.commitStateMutationsLocked()
 	cast := runtime.casts[castID]
 	if cast == nil || (cast.status != CastRunning && cast.status != CastSuspended) || cast.logicalFinished || cast.windowStage == CastWindowRecovering || cast.windowStage == CastWindowComplete || cast.windowStage == CastWindowCancelled {
 		return ErrCastInputRejected

@@ -125,6 +125,7 @@ func (runtime *Runtime) PollPresentation(after uint64, limit int) PresentationBa
 	batch := PresentationBatch{LatestSequence: runtime.presentationSequence}
 	if len(runtime.presentationEvents) == 0 {
 		batch.OldestSequence = runtime.presentationSequence + 1
+		batch.CursorExpired = after < runtime.presentationSequence
 		return batch
 	}
 	batch.OldestSequence = runtime.presentationEvents[0].Sequence

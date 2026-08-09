@@ -22,6 +22,8 @@ type procLedgerKey struct {
 func (runtime *Runtime) ActivatePassive(program *Program, event EventContext) (PassiveActivationID, error) {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
+	runtime.beginStateMutationLocked()
+	defer runtime.commitStateMutationsLocked()
 	owner := event.Owner
 	if owner == 0 {
 		owner = event.Source

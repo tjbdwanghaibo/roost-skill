@@ -3,6 +3,7 @@ package skillsync
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,6 +19,7 @@ var (
 	ErrVisibilityRequired = errors.New("skillsync: visibility policy is required")
 	ErrManifestMissing    = errors.New("skillsync: presentation manifest is missing")
 	ErrTopicUnsupported   = errors.New("skillsync: topic is unsupported")
+	ErrObserverClosed     = errors.New("skillsync: observer is closed")
 )
 
 type PacketPublisher interface{ Publish(syncstream.Packet) error }
@@ -60,6 +62,11 @@ type sourceCursor struct {
 	presentation uint64
 }
 
+type viewLockEntry struct {
+	mutex sync.Mutex
+	refs  int
+}
+
 type CoordinatorMetrics struct {
 	Published          uint64
 	PublishFailures    uint64
@@ -79,18 +86,20 @@ type coordinatorCounters struct {
 // Coordinator serializes preparation per observer/key but never holds its
 // global mutex while invoking VisibilityPolicy, PacketPublisher, or Runtime.
 type Coordinator struct {
-	mutex      sync.RWMutex
-	runtime    *skillv2.Runtime
-	history    *syncstream.History
-	publisher  PacketPublisher
-	projector  Projector
-	visibility VisibilityPolicy
-	outbox     *Outbox
-	maxPackets int
-	cursors    map[observerKey]sourceCursor
-	plans      map[int64]skillv2.PresentationPlan
-	viewLocks  map[observerKey]*sync.Mutex
-	counters   coordinatorCounters
+	mutex            sync.RWMutex
+	runtime          *skillv2.Runtime
+	history          *syncstream.History
+	publisher        PacketPublisher
+	projector        Projector
+	visibility       VisibilityPolicy
+	outbox           *Outbox
+	maxPackets       int
+	cursors          map[observerKey]sourceCursor
+	plans            map[int64]skillv2.PresentationPlan
+	viewLocks        map[observerKey]*viewLockEntry
+	closedObservers  map[syncstream.Observer]struct{}
+	closingObservers map[syncstream.Observer]struct{}
+	counters         coordinatorCounters
 }
 
 func NewCoordinator(options CoordinatorOptions) (*Coordinator, error) {
@@ -124,18 +133,47 @@ func NewCoordinator(options CoordinatorOptions) (*Coordinator, error) {
 	if err := options.Outbox.Reconcile(options.History.Export()); err != nil {
 		return nil, err
 	}
-	return &Coordinator{runtime: options.Runtime, history: options.History, publisher: options.Publisher, projector: options.Projector, visibility: options.Visibility, outbox: options.Outbox, maxPackets: options.MaxPacketsPerFlush, cursors: make(map[observerKey]sourceCursor), plans: make(map[int64]skillv2.PresentationPlan), viewLocks: make(map[observerKey]*sync.Mutex)}, nil
+	return &Coordinator{runtime: options.Runtime, history: options.History, publisher: options.Publisher, projector: options.Projector, visibility: options.Visibility, outbox: options.Outbox, maxPackets: options.MaxPacketsPerFlush, cursors: make(map[observerKey]sourceCursor), plans: make(map[int64]skillv2.PresentationPlan), viewLocks: make(map[observerKey]*viewLockEntry), closedObservers: make(map[syncstream.Observer]struct{}), closingObservers: make(map[syncstream.Observer]struct{})}, nil
 }
 
-func (coordinator *Coordinator) viewLock(key observerKey) *sync.Mutex {
+func (coordinator *Coordinator) acquireView(key observerKey) (func(), error) {
+	coordinator.mutex.Lock()
+	if _, closed := coordinator.closedObservers[key.observer]; closed {
+		coordinator.mutex.Unlock()
+		return nil, ErrObserverClosed
+	}
+	entry := coordinator.viewLocks[key]
+	if entry == nil {
+		entry = &viewLockEntry{}
+		coordinator.viewLocks[key] = entry
+	}
+	entry.refs++
+	coordinator.mutex.Unlock()
+	entry.mutex.Lock()
+	return func() {
+		entry.mutex.Unlock()
+		coordinator.mutex.Lock()
+		entry.refs--
+		if entry.refs == 0 && coordinator.viewLocks[key] == entry {
+			delete(coordinator.viewLocks, key)
+		}
+		coordinator.mutex.Unlock()
+	}, nil
+}
+
+func (coordinator *Coordinator) OpenObserver(observer syncstream.Observer) error {
 	coordinator.mutex.Lock()
 	defer coordinator.mutex.Unlock()
-	lock := coordinator.viewLocks[key]
-	if lock == nil {
-		lock = &sync.Mutex{}
-		coordinator.viewLocks[key] = lock
+	if _, closing := coordinator.closingObservers[observer]; closing {
+		return ErrApplyInProgress
 	}
-	return lock
+	for key := range coordinator.viewLocks {
+		if key.observer == observer {
+			return ErrApplyInProgress
+		}
+	}
+	delete(coordinator.closedObservers, observer)
+	return nil
 }
 
 func (coordinator *Coordinator) RegisterProgram(key int64, program *skillv2.Program) {
@@ -164,18 +202,20 @@ func (coordinator *Coordinator) setCursor(key observerKey, cursor sourceCursor) 
 
 func (coordinator *Coordinator) PublishManifest(observer syncstream.Observer, key int64) error {
 	view := observerKey{observer, key}
-	lock := coordinator.viewLock(view)
-	lock.Lock()
+	release, err := coordinator.acquireView(view)
+	if err != nil {
+		return err
+	}
 	plan, ok := coordinator.plan(key)
 	if !ok {
-		lock.Unlock()
+		release()
 		return ErrManifestMissing
 	}
 	packet, err := coordinator.projector.ManifestPacket(observer, key, plan)
 	if err == nil {
 		_, err = coordinator.appendPending(packet)
 	}
-	lock.Unlock()
+	release()
 	if err != nil {
 		return err
 	}
@@ -184,12 +224,14 @@ func (coordinator *Coordinator) PublishManifest(observer syncstream.Observer, ke
 
 func (coordinator *Coordinator) PublishSnapshot(observer syncstream.Observer, key int64) error {
 	view := observerKey{observer, key}
-	lock := coordinator.viewLock(view)
-	lock.Lock()
+	release, err := coordinator.acquireView(view)
+	if err != nil {
+		return err
+	}
 	snapshot, err := coordinator.visibility.FilterStateSnapshot(observer, coordinator.runtime.StateSnapshot())
 	if err != nil {
 		coordinator.counters.visibilityFailures.Add(1)
-		lock.Unlock()
+		release()
 		return err
 	}
 	packet, err := coordinator.projector.StateSnapshotPacket(observer, key, snapshot)
@@ -201,7 +243,7 @@ func (coordinator *Coordinator) PublishSnapshot(observer syncstream.Observer, ke
 		cursor.state = snapshot.LatestStateMutationSequence
 		coordinator.setCursor(view, cursor)
 	}
-	lock.Unlock()
+	release()
 	if err != nil {
 		return err
 	}
@@ -210,10 +252,12 @@ func (coordinator *Coordinator) PublishSnapshot(observer syncstream.Observer, ke
 
 func (coordinator *Coordinator) Flush(observer syncstream.Observer, key int64) error {
 	view := observerKey{observer, key}
-	lock := coordinator.viewLock(view)
-	lock.Lock()
-	err := coordinator.prepareFlush(view)
-	lock.Unlock()
+	release, err := coordinator.acquireView(view)
+	if err != nil {
+		return err
+	}
+	err = coordinator.prepareFlush(view)
+	release()
 	if err != nil {
 		return err
 	}
@@ -343,8 +387,10 @@ func (provider snapshotProviderFunc) Snapshot(request syncstream.ResyncRequest) 
 
 func (coordinator *Coordinator) Recover(request syncstream.ResyncRequest) (syncstream.ResyncResult, error) {
 	view := observerKey{request.Observer, request.Stream.Key}
-	lock := coordinator.viewLock(view)
-	lock.Lock()
+	release, err := coordinator.acquireView(view)
+	if err != nil {
+		return syncstream.ResyncResult{}, err
+	}
 	result, err := coordinator.history.Recover(request, snapshotProviderFunc(coordinator.snapshotPacket))
 	if err == nil {
 		for _, packet := range result.Packets {
@@ -354,7 +400,7 @@ func (coordinator *Coordinator) Recover(request syncstream.ResyncRequest) (syncs
 			}
 		}
 	}
-	lock.Unlock()
+	release()
 	if err != nil {
 		return result, err
 	}
@@ -420,6 +466,43 @@ func (coordinator *Coordinator) capturePublishMetrics(before, after OutboxMetric
 }
 
 func (coordinator *Coordinator) CloseObserver(observer syncstream.Observer) error {
+	coordinator.mutex.Lock()
+	if _, closing := coordinator.closingObservers[observer]; closing {
+		coordinator.mutex.Unlock()
+		return ErrApplyInProgress
+	}
+	coordinator.closedObservers[observer] = struct{}{}
+	coordinator.closingObservers[observer] = struct{}{}
+	type lockedView struct {
+		key   observerKey
+		entry *viewLockEntry
+	}
+	views := make([]lockedView, 0)
+	for key, entry := range coordinator.viewLocks {
+		if key.observer == observer {
+			entry.refs++ // close operation owns a reference
+			views = append(views, lockedView{key, entry})
+		}
+	}
+	coordinator.mutex.Unlock()
+	sort.Slice(views, func(i, j int) bool { return views[i].key.key < views[j].key.key })
+	for _, view := range views {
+		view.entry.mutex.Lock()
+	}
+	defer func() {
+		for index := len(views) - 1; index >= 0; index-- {
+			views[index].entry.mutex.Unlock()
+		}
+		coordinator.mutex.Lock()
+		delete(coordinator.closingObservers, observer)
+		for _, view := range views {
+			view.entry.refs--
+			if view.entry.refs == 0 && coordinator.viewLocks[view.key] == view.entry {
+				delete(coordinator.viewLocks, view.key)
+			}
+		}
+		coordinator.mutex.Unlock()
+	}()
 	if _, err := coordinator.history.DeleteObserver(observer); err != nil {
 		return err
 	}

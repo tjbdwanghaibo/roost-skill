@@ -5,6 +5,8 @@ import "sort"
 func (runtime *Runtime) QueueExternalEvent(event EventContext) error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
+	runtime.beginStateMutationLocked()
+	defer runtime.commitStateMutationsLocked()
 	if event.Tick < runtime.currentTick || event.WorldRevision > runtime.host.CurrentRevision() {
 		return ErrRevisionUnavailable
 	}

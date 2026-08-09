@@ -66,10 +66,10 @@ type StateMutationBatch struct {
 func (runtime *Runtime) StateDeltas(after uint64, limit int) StateMutationBatch {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
-	runtime.refreshStateMutationsLocked()
 	batch := StateMutationBatch{LatestSequence: runtime.stateMutationSequence, Dropped: runtime.stateMutationDropped}
 	if len(runtime.stateMutations) == 0 {
 		batch.OldestSequence = runtime.stateMutationSequence + 1
+		batch.CursorExpired = after < runtime.stateMutationSequence
 		return batch
 	}
 	batch.OldestSequence = runtime.stateMutations[0].Sequence
@@ -87,7 +87,11 @@ func (runtime *Runtime) StateDeltas(after uint64, limit int) StateMutationBatch 
 	return batch
 }
 
-func (runtime *Runtime) refreshStateMutationsLocked() {
+func (runtime *Runtime) commitStateMutationsLocked() {
+	if !runtime.stateMutationDirty {
+		return
+	}
+	runtime.stateMutationDirty = false
 	current := runtime.stateSnapshotLocked()
 	if !runtime.stateMutationReady {
 		runtime.stateMutationBaseline = current
@@ -111,6 +115,20 @@ func (runtime *Runtime) refreshStateMutationsLocked() {
 		runtime.stateMutations = runtime.stateMutations[:runtime.options.StateMutationLimit]
 		runtime.stateMutationDropped += uint64(overflow)
 	}
+}
+
+func (runtime *Runtime) beginStateMutationLocked() {
+	runtime.stateMutationDirty = true
+}
+
+// CaptureExternalState records changes made by an authoritative extension
+// provider outside a Runtime API call. Normal Runtime mutations are captured
+// automatically before their public method returns.
+func (runtime *Runtime) CaptureExternalState() {
+	runtime.mutex.Lock()
+	defer runtime.mutex.Unlock()
+	runtime.beginStateMutationLocked()
+	runtime.commitStateMutationsLocked()
 }
 
 func diffRuntimeState(before, after RuntimeStateSnapshot) []StateMutation {

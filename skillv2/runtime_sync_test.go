@@ -104,3 +104,19 @@ func TestStateMutationsFoldExactlyIntoLaterSnapshot(t *testing.T) {
 		t.Fatalf("folded state does not equal snapshot\ngot  %s\nwant %s", got, want)
 	}
 }
+
+func TestStateMutationsAreCommittedBeforeWriteReturns(t *testing.T) {
+	program, environment := compileRuntimeFixture(t, "simple_damage.json")
+	runtime := NewRuntime(runtimeTestHost(environment), RuntimeOptions{StateMutationLimit: 64})
+	if _, err := runtime.Activate(program, CastInput{Caster: 1, Target: 2}); err != nil {
+		t.Fatal(err)
+	}
+	first := runtime.StateDeltas(0, 0)
+	if len(first.Mutations) == 0 || first.LatestSequence == 0 {
+		t.Fatalf("write did not commit mutations: %#v", first)
+	}
+	second := runtime.StateDeltas(first.LatestSequence, 0)
+	if len(second.Mutations) != 0 || second.LatestSequence != first.LatestSequence {
+		t.Fatalf("read generated mutations: first=%#v second=%#v", first, second)
+	}
+}
