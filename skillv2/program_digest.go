@@ -84,7 +84,7 @@ func gameplayProgramDigestPayload(program *Program) any {
 		for trackIndex, track := range template.numericTracks {
 			numericTracks[trackIndex] = map[string]any{"property": track.property, "operation": track.operation, "value": programValueDigest(track.value), "over_ticks": track.overTicks}
 		}
-		processTemplates[index] = map[string]any{"index": template.index, "duration_ticks": template.durationTicks, "interval_ticks": template.intervalTicks, "emit_leave_on_stop": template.emitLeaveOnStop, "area": selectorProgramDigest(template.area), "motion": motionProgramDigest(template.motion), "numeric_tracks": numericTracks, "callbacks": callbacks}
+		processTemplates[index] = map[string]any{"index": template.index, "duration_ticks": template.durationTicks, "interval_ticks": template.intervalTicks, "emit_leave_on_stop": template.emitLeaveOnStop, "visual": template.visual, "has_visual": template.hasVisual, "area": selectorProgramDigest(template.area), "motion": motionProgramDigest(template.motion), "numeric_tracks": numericTracks, "callbacks": callbacks}
 	}
 	processProperties := make([]any, len(program.processProperties))
 	for index, property := range program.processProperties {

@@ -12,6 +12,7 @@ type ProcessDefinition struct {
 	DurationTicks   Tick
 	IntervalTicks   Tick
 	EmitLeaveOnStop bool
+	Visual          *VisualRef
 	Area            *SelectDefinition
 	Motion          *MotionDefinition
 	NumericTracks   []NumericTrackDefinition
@@ -106,6 +107,7 @@ func decodeProcess(data []byte) (*ProcessDefinition, error) {
 		DurationTicks   Tick            `json:"duration_ticks"`
 		IntervalTicks   Tick            `json:"interval_ticks"`
 		EmitLeaveOnStop bool            `json:"emit_leave_on_stop"`
+		Visual          *VisualRef      `json:"visual"`
 		Area            json.RawMessage `json:"area"`
 		Motion          json.RawMessage `json:"motion"`
 		NumericTracks   []struct {
@@ -138,7 +140,7 @@ func decodeProcess(data []byte) (*ProcessDefinition, error) {
 		}
 		tracks[index] = NumericTrackDefinition{Property: track.Property, Operation: track.Operation, Value: value, OverTicks: track.OverTicks}
 	}
-	return &ProcessDefinition{Kind: raw.Kind, DurationTicks: raw.DurationTicks, IntervalTicks: raw.IntervalTicks, EmitLeaveOnStop: raw.EmitLeaveOnStop, Area: area, Motion: motion, NumericTracks: tracks}, nil
+	return &ProcessDefinition{Kind: raw.Kind, DurationTicks: raw.DurationTicks, IntervalTicks: raw.IntervalTicks, EmitLeaveOnStop: raw.EmitLeaveOnStop, Visual: raw.Visual, Area: area, Motion: motion, NumericTracks: tracks}, nil
 }
 
 func decodeOptionalMotion(data json.RawMessage) (*MotionDefinition, error) {

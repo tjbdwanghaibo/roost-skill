@@ -44,6 +44,7 @@ func (runtime *Runtime) startEntityProcess(cast *castInstance, template ProcessT
 	process.visibleRevision = cast.visibleRevision
 	runtime.processes[process.ID] = process
 	runtime.drainHostEvents(cast)
+	runtime.emitProcessPresentation(cast, process, PresentationProcessStart, "", "", cast.visibleRevision)
 	if cast.areaCallbackFinish {
 		return runtime.terminateProcess(cast, process, StopCauseCancel, "")
 	}
@@ -71,6 +72,7 @@ func (runtime *Runtime) startEntityProcess(cast *castInstance, template ProcessT
 	if processTemplate.area == nil {
 		startSignals = append(startSignals, ProcessSignal{Kind: ProcessSignalEnter, Target: lifecycle})
 	}
+	runtime.emitProcessSignals(cast, process, startSignals, cast.visibleRevision)
 	if err := runtime.dispatchOwnedProcessSignals(process, startSignals); err != nil {
 		stopErr := runtime.terminateProcess(cast, process, StopCauseFailure, "")
 		if stopErr == nil {
@@ -307,6 +309,8 @@ func (runtime *Runtime) advanceOwnedProcesses() error {
 			}
 			signals = append(signals, areaSignals...)
 		}
+		runtime.emitProcessPresentation(stepCast, process, PresentationProcessUpdate, "", "", stepCast.visibleRevision)
+		runtime.emitProcessSignals(stepCast, process, signals, stepCast.visibleRevision)
 		if cast := runtime.casts[process.CastID]; cast != nil {
 			cast.visibleRevision = maxRevision(cast.visibleRevision, stepCast.visibleRevision)
 		}
@@ -450,7 +454,7 @@ func (runtime *Runtime) runOwnedProcessCallback(process *ProcessInstance, event 
 			ownerCast.areaCallbackFinish = true
 			process.areaCallbackFinishedCast = true
 		}
-		runtime.runtimeEvents = append(runtime.runtimeEvents, RuntimeEvent{Tick: runtime.currentTick, Kind: "owned_process_callback_" + event, Entity: process.LifecycleEntity, Context: callbackCast.detachedEvent})
+		runtime.appendRuntimeEvent(RuntimeEvent{Tick: runtime.currentTick, Kind: "owned_process_callback_" + event, Entity: process.LifecycleEntity, Context: callbackCast.detachedEvent})
 	}
 	return nil
 }

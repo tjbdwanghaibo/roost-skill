@@ -514,6 +514,9 @@ func (c *loweringContext) lowerEffect(header operationHeader, flow *effectFlowIR
 			template.durationTicks = flow.process.durationTicks
 			template.intervalTicks = flow.process.intervalTicks
 			template.emitLeaveOnStop = flow.process.emitLeaveOnStop
+			if visual, found := c.artifacts.visual.bySourcePath[flow.process.source.Path]; found {
+				template.visual, template.hasVisual = visual, true
+			}
 			if flow.process.area != nil {
 				area := c.lowerSelectorPlan(*flow.process.area, scope)
 				template.area = &area

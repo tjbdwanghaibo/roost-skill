@@ -17,14 +17,14 @@ cube-skill/skillv2        cube-core/sync.ISyncBus
      game host                 NATS / JetStream
 ```
 
-- `cube-core/syncstream`：只有 Observer、Stream、Packet、序号、ACK、有限历史和
-  重同步判定，不知道技能、实体渲染或 NATS。
+- `cube-core/syncstream`：只有 Observer、Stream、Packet、序号、ACK、有限历史、
+  自动全量恢复、持久化表示和指标，不知道技能、实体渲染或 NATS。
 - `cube-kit/syncstream`：把 Packet 编码为现有 `sync.SyncMsg`，复用 NATS 或
   JetStream；不解释技能 Payload。
-- `cube-skill/skillv2`：编译和执行权威技能逻辑，产生不可变 PresentationPlan
-  和有序 PresentationEvent。
+- `cube-skill/skillv2`：编译和执行权威技能逻辑，产生不可变 PresentationPlan、
+  有序 PresentationEvent、RuntimeStateSnapshot 和强类型 StateEvent。
 - `cube-skill/skillsync`：定义技能 Manifest、状态全量/增量、表现事件的 JSON
-  记录，并投影成通用 Packet。
+  记录，提供服务端 Coordinator 和客户端 Applier。
 - 具体游戏：实现 `skillv2.Host`、决定 Observer 可见范围、生成状态快照、选择
   NATS 或 JetStream、处理断线重连。
 
@@ -49,11 +49,13 @@ cast commit 后产生。因此客户端永远不会先看到一个被权威层�
 1. 编译技能并保存 `InspectIdentity(program)`。
 2. 调用 `InspectPresentationPlan(program)`；按 PresentationDigest 缓存并发布一次
    Manifest Full Packet。
-3. Runtime 激活或推进后，调用 `PresentationEvents(lastSequence)` 获取新增事件。
-4. 用 `skillsync.Projector` 生成 Packet。
-5. 调用 `syncstream.History.Append` 分配 Observer + Stream 独立序号。
-6. 先保存 History，再交给 `cube-kit/syncstream.Publisher` 发布。
-7. 关键状态变更同时发送 state delta；周期性或重连时发送 state full。
+3. Runtime 激活或推进后调用 `Coordinator.Flush(observer, key)`；它分别轮询
+   `StateEvents` 和 `PollPresentation`。
+4. Coordinator 先执行 VisibilityPolicy，再用 Projector 生成强类型 Packet。
+5. `syncstream.History.Append` 分配 Observer + Stream 独立序号。
+6. Append 成功后推进 source cursor，再交给 `cube-kit/syncstream.Publisher` 发布；
+   publish 失败的数据仍留在 History。
+7. 新 observer、游标过期或 schema/gap 恢复时发送 state full 或 presentation reset。
 
 不要直接把 `PresentationEvent.Sequence` 当作网络流序号。它是单 Runtime 事件序号；
 网络序号必须由 `History.Append` 按 Observer + Stream 分配。
@@ -64,13 +66,14 @@ cast commit 后产生。因此客户端永远不会先看到一个被权威层�
 
 1. 服务端调用 `History.Acknowledge(observer, stream, sequence)`。
 2. 客户端重连时提交 AfterSequence 与 SchemaVersion。
-3. `History.Resync` 返回连续 Packets 时，按顺序重放。
-4. 返回 `FullRequired=true` 时，根据 Reason 处理：
+3. `History.Recover` 返回连续 Packets 时，按顺序重放。
+4. 无法 replay 时，Recover 自动调用 SnapshotProvider 产生并 Append Full，Reason 表示原因：
    - `history_missing`：首次连接或服务重启，生成 Full；
    - `history_gap`：历史窗口已经覆盖，生成 Full；
    - `schema_mismatch`：客户端协议不同，发送兼容 Full 或拒绝升级；
    - `client_ahead`：客户端串服/回滚，清空客户端游标并发送 Full。
 5. Full Packet 会创建新的恢复锚点；后续 delta 的 BaseSequence 指向它。
+6. `History.Export/Import` 用于重启恢复；Import 先完整验证再原子替换。
 
 ## 5. 发布与迁移顺序
 
@@ -137,6 +140,9 @@ go test -race ./...     # 三个模块分别运行
 - Schema：版本不一致 FullRequired + schema_mismatch。
 - Observer：相同 Topic/Key 的不同 Observer 序号互不污染。
 - Wire：内层 Packet 的 topic/key/sequence 与外层 SyncMsg 不一致时拒绝。
+- Visibility：nil policy 拒绝启动；跨 observer packet 在发送端和客户端均拒绝。
+- Persistence：非法快照 Import 不改变现有 History；合法快照 payload 不别名。
+- Backpressure：有界队列满时显式返回错误，已接受包在 Close 时排空。
 - Transport：NATS 自消息过滤；JetStream 重试、去重 ID、handler 错误传播。
 
 ### 6.4 验收门槛

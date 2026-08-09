@@ -4,6 +4,17 @@ import (
 	"sort"
 )
 
+func (host *MemoryHost) SkillPersistentStateSnapshot() []PersistentStateSnapshot {
+	host.mutex.RLock()
+	defer host.mutex.RUnlock()
+	result := make([]PersistentStateSnapshot, 0, len(host.states))
+	for key, record := range host.states {
+		result = append(result, PersistentStateSnapshot{Handle: key.handle, Binding: key.binding, Value: cloneStateRuntimeValue(record.value), DueTick: record.dueTick, Sequence: record.sequence, ClearOn: append([]string(nil), record.clearOn...)})
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Sequence < result[j].Sequence })
+	return result
+}
+
 func (host *MemoryHost) ReadState(request StateReadRequest) (StateReadResult, error) {
 	host.mutex.Lock()
 	defer host.mutex.Unlock()

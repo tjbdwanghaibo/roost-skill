@@ -1,6 +1,6 @@
 # Skill v2 当前实现学习手册
 
-本文对应当前 `codex/skill-v2-complete` 分支中的实现。目标是帮助新读者从一份
+本文对应当前 `codex/skill-v2-extract` 分支中的实现。目标是帮助新读者从一份
 JSON 技能定义，顺着真实调用链走到确定性的世界交互，而不是先被大量
 `wire_*`、`ir_*`、`program_*` 文件淹没。
 
@@ -272,3 +272,21 @@ git diff --check
 测试失败时，先按层定位：`Parse` 失败看 Wire；有 Diagnostic 看对应 pass；Program
 inspection 不符看 lowering；cast 状态不符看 Runtime/Scheduler；世界结果不符看
 Host command/result 和 revision。这样通常不需要在整条链路中盲目断点。
+
+## 10. Visual 与 Sync 的继续阅读路线
+
+完成 Runtime 主链后，按以下顺序继续：
+
+1. `wire_visual.go`、`compile_visual.go`、`program_visual.go`：Visual 从严格 wire 到
+   canonical manifest；
+2. `presentation.go`、`presentation_assets.go`：静态 mount、动态生命周期事件和客户端
+   资源解析边界；
+3. `runtime_sync.go`、`runtime_value_json.go`：权威全量状态、强类型 delta 和游标过期；
+4. `skillsync/skillsync.go`：三类业务 record 如何进入通用 Packet；
+5. `skillsync/coordinator.go`：observer 策略、source cursor、History 和自动恢复；
+6. `skillsync/applier.go`：客户端 schema/sequence/manifest 校验与幂等应用；
+7. `cube-core/syncstream`：网络序号、ACK、replay、full fallback、持久化与指标；
+8. `cube-kit/syncstream`：NATS/JetStream envelope、observer 隔离和背压。
+
+完整生产接入、发布与故障注入流程见
+[Visual 与数据同步生产指南](visual-sync-production-guide.md)。

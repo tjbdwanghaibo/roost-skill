@@ -5,6 +5,8 @@ type processTemplateProgram struct {
 	durationTicks   Tick
 	intervalTicks   Tick
 	emitLeaveOnStop bool
+	visual          VisualIndex
+	hasVisual       bool
 	area            *selectorProgram
 	motion          *motionProgram
 	numericTracks   []numericTrackProgram

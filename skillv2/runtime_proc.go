@@ -98,7 +98,7 @@ func (runtime *Runtime) executePassiveActivation(task *passiveActivationTask) er
 	if plan.proc.OncePerRootEvent {
 		runtime.procLedger[ledgerKey] = struct{}{}
 	}
-	runtime.runtimeEvents = append(runtime.runtimeEvents, RuntimeEvent{Tick: runtime.currentTick, Kind: "passive_activated", Entity: task.Owner, Context: EventContext{RootEventID: root, ParentEventID: task.Event.EventID, Owner: task.Owner, SkillID: program.id, CastID: castID, ProcDepth: task.Event.ProcDepth + 1}})
+	runtime.appendRuntimeEvent(RuntimeEvent{Tick: runtime.currentTick, Kind: "passive_activated", Entity: task.Owner, Context: EventContext{RootEventID: root, ParentEventID: task.Event.EventID, Owner: task.Owner, SkillID: program.id, CastID: castID, ProcDepth: task.Event.ProcDepth + 1}})
 	return nil
 }
 
@@ -165,5 +165,5 @@ func containsDamageType(values []DamageTypeHandle, wanted DamageTypeHandle) bool
 }
 
 func (runtime *Runtime) emitPassiveSuppressed(task *passiveActivationTask, reason string) {
-	runtime.runtimeEvents = append(runtime.runtimeEvents, RuntimeEvent{Tick: runtime.currentTick, Kind: "passive_suppressed", Entity: task.Owner, Context: EventContext{RootEventID: task.Event.RootEventID, ParentEventID: task.Event.EventID, Owner: task.Owner, SkillID: task.Program.id, Result: reason}})
+	runtime.appendRuntimeEvent(RuntimeEvent{Tick: runtime.currentTick, Kind: "passive_suppressed", Entity: task.Owner, Context: EventContext{RootEventID: task.Event.RootEventID, ParentEventID: task.Event.EventID, Owner: task.Owner, SkillID: task.Program.id, Result: reason}})
 }

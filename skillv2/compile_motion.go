@@ -6,7 +6,7 @@ func (n *normalizer) normalizeProcess(value *ProcessDefinition, path string) *pr
 	if value == nil {
 		return nil
 	}
-	result := &processIR{source: n.source(path), kind: value.Kind, durationTicks: value.DurationTicks, intervalTicks: value.IntervalTicks, emitLeaveOnStop: value.EmitLeaveOnStop, numericTracks: make([]numericTrackIR, len(value.NumericTracks))}
+	result := &processIR{source: n.source(path), kind: value.Kind, durationTicks: value.DurationTicks, intervalTicks: value.IntervalTicks, emitLeaveOnStop: value.EmitLeaveOnStop, visual: normalizeVisual(value.Visual), numericTracks: make([]numericTrackIR, len(value.NumericTracks))}
 	if value.Area != nil {
 		area := n.normalizeSelect(*value.Area, path+".area")
 		result.area = &area

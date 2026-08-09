@@ -251,7 +251,11 @@ func (runtime *Runtime) executeOperation(cast *castInstance, index OperationInde
 	case motionImpulseOperation:
 		return flowControl{}, runtime.executeMotionImpulse(cast, operation)
 	case stopMovementOperation:
-		runtime.emitEffectPresentation(cast, operation.effectContinuations, operation.effectIndex, runtime.host.CurrentRevision())
+		target, err := runtime.evalEntity(cast, operation.target)
+		if err != nil {
+			return flowControl{}, err
+		}
+		runtime.emitEffectPresentation(cast, operation.effectContinuations, operation.effectIndex, runtime.host.CurrentRevision(), PresentationAnchor{Source: cast.caster, Target: target})
 		return flowControl{}, nil
 	case gotoOperation:
 		return flowControl{kind: flowGoto, phase: operation.phase}, nil

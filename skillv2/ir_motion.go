@@ -11,6 +11,7 @@ type processIR struct {
 	durationTicks   Tick
 	intervalTicks   Tick
 	emitLeaveOnStop bool
+	visual          *visualIR
 	area            *selectIR
 	motion          motionIR
 	numericTracks   []numericTrackIR

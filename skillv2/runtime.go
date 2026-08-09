@@ -34,6 +34,8 @@ type RuntimeOptions struct {
 	TraceLimit int
 	// PresentationLimit bounds renderer-facing events retained for polling.
 	PresentationLimit int
+	// StateEventLimit bounds authoritative change events retained for sync.
+	StateEventLimit int
 }
 
 type CastInput struct {
@@ -185,6 +187,9 @@ type Runtime struct {
 	traceFlushed            int
 	presentationEvents      []PresentationEvent
 	presentationSequence    uint64
+	stateEvents             []StateEvent
+	stateEventSequence      uint64
+	stateEventDropped       uint64
 }
 
 func NewRuntime(host Host, options RuntimeOptions) *Runtime {
@@ -208,6 +213,9 @@ func NewRuntime(host Host, options RuntimeOptions) *Runtime {
 	}
 	if options.PresentationLimit <= 0 {
 		options.PresentationLimit = 1024
+	}
+	if options.StateEventLimit <= 0 {
+		options.StateEventLimit = 2048
 	}
 	runtime := &Runtime{
 		host: host, options: options,

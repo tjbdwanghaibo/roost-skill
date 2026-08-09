@@ -9,7 +9,9 @@ var visualKeywordPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 func runVisualPass(context *compileContext) {
 	artifact := visualArtifact{bySourcePath: make(map[string]VisualIndex)}
+	referenceCount := 0
 	intern := func(visual *visualIR, mount, path string) (VisualIndex, bool) {
+		referenceCount++
 		if !validateVisual(context, visual, mount, path) {
 			return 0, false
 		}
@@ -42,7 +44,18 @@ func runVisualPass(context *compileContext) {
 			artifact.bySourcePath[effect.sourceRef().Path] = index
 		}
 	})
-	if len(artifact.entries) > context.environment.Visual.Limits.MaxVisualRefs {
+	context.artifacts.ir.walkFlows(func(flow flowIR) {
+		effectFlow, ok := flow.(*effectFlowIR)
+		if !ok || effectFlow.process == nil || effectFlow.process.visual == nil {
+			return
+		}
+		process := effectFlow.process
+		index, valid := intern(process.visual, process.kind, process.source.Path+".visual")
+		if valid {
+			artifact.bySourcePath[process.source.Path] = index
+		}
+	})
+	if referenceCount > context.environment.Visual.Limits.MaxVisualRefs {
 		context.addDiagnostic(DiagnosticVisualInvalid, "$.visual", "visual references exceed catalog limit")
 	}
 	context.artifacts.visual = artifact

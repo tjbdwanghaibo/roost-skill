@@ -15,6 +15,8 @@ type VisualView struct {
 }
 
 type SkillVisualManifest struct {
-	Digest  string
-	Entries []VisualView
+	Digest          string
+	CatalogRevision string
+	CatalogDigest   string
+	Entries         []VisualView
 }

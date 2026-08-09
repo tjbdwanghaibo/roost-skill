@@ -346,7 +346,7 @@ func stateChangeResultField(before, after RuntimeValue, applied bool, name strin
 func (runtime *Runtime) resolveEffectResult(cast *castInstance, continuations effectContinuations, effectIndex EffectIndex, value RuntimeValue, outcome ResultOutcome) (flowControl, error) {
 	if !outcome.Succeeded {
 		event := RuntimeEvent{Tick: runtime.currentTick, Kind: "effect_expected_failure", Entity: cast.caster, Context: runtime.effectEventContext(cast, effectIndex), Result: &EffectResultEvent{EffectIndex: effectIndex, ResultType: string(continuations.result.typ), FailureReason: outcome.FailureReason}}
-		runtime.runtimeEvents = append(runtime.runtimeEvents, event)
+		runtime.appendRuntimeEvent(event)
 		cast.events = append(cast.events, cloneRuntimeEvent(event))
 	}
 	root, hasRoot := continuations.success, continuations.hasSuccess
@@ -372,9 +372,6 @@ func (runtime *Runtime) resolveEffectResult(cast *castInstance, continuations ef
 func (runtime *Runtime) resolveHostEffectExecution(cast *castInstance, continuations effectContinuations, effectIndex EffectIndex, result EffectResult, err error) (flowControl, error) {
 	if err != nil {
 		return flowControl{}, err
-	}
-	if outcome, _, ok := effectPayloadOutcome(result.Payload); ok && outcome.Succeeded {
-		runtime.emitEffectPresentation(cast, continuations, effectIndex, result.Commit.Revision)
 	}
 	if continuations.result.typ == "" {
 		return flowControl{kind: flowContinue}, nil

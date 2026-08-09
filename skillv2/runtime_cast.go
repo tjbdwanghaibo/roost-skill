@@ -99,12 +99,7 @@ func (runtime *Runtime) executeResource(cast *castInstance, operation resourceOp
 	if err != nil {
 		return err
 	}
-	result, err := runtime.applyHostEffect(cast, EffectCommand{Meta: CommandMeta{RequiredRevision: cast.visibleRevision, EffectIndex: operation.effectIndex}, Payload: ResourceCommand{Target: target, Resource: operation.resource, Operation: operation.operation, Amount: amount}})
-	if err == nil {
-		if outcome, _, ok := effectPayloadOutcome(result.Payload); !ok || outcome.Succeeded {
-			runtime.emitEffectPresentation(cast, operation.effectContinuations, operation.effectIndex, result.Commit.Revision)
-		}
-	}
+	_, err = runtime.applyHostEffect(cast, EffectCommand{Meta: CommandMeta{RequiredRevision: cast.visibleRevision, EffectIndex: operation.effectIndex}, Payload: ResourceCommand{Target: target, Resource: operation.resource, Operation: operation.operation, Amount: amount}})
 	return err
 }
 
@@ -167,12 +162,7 @@ func (runtime *Runtime) executeMotionImpulse(cast *castInstance, operation motio
 	if operation.kind == "pull" {
 		payload = PullCommand{Target: target, Toward: origin, Distance: distance}
 	}
-	result, err := runtime.applyHostEffect(cast, EffectCommand{Meta: meta, Payload: payload})
-	if err == nil {
-		if outcome, _, ok := effectPayloadOutcome(result.Payload); !ok || outcome.Succeeded {
-			runtime.emitEffectPresentation(cast, operation.effectContinuations, operation.effectIndex, result.Commit.Revision)
-		}
-	}
+	_, err = runtime.applyHostEffect(cast, EffectCommand{Meta: meta, Payload: payload})
 	return err
 }
 
@@ -183,7 +173,57 @@ func (runtime *Runtime) applyHostEffect(cast *castInstance, command EffectComman
 	}
 	cast.visibleRevision = maxRevision(cast.visibleRevision, result.Commit.Revision)
 	runtime.drainHostEvents(cast)
+	if outcome, _, known := effectPayloadOutcome(result.Payload); !known || outcome.Succeeded {
+		if continuations, found := presentationEffectMount(cast.program, command.Meta.EffectIndex); found {
+			runtime.emitEffectPresentation(cast, continuations, command.Meta.EffectIndex, result.Commit.Revision, presentationAnchorFromCommand(cast, command.Payload))
+		}
+	}
 	return result, nil
+}
+
+func presentationAnchorFromCommand(cast *castInstance, payload EffectCommandPayload) PresentationAnchor {
+	anchor := PresentationAnchor{Source: cast.caster, Target: cast.primaryTarget}
+	switch command := payload.(type) {
+	case DamageCommand:
+		anchor.Source, anchor.Target = command.Source, command.Target
+	case HealCommand:
+		anchor.Source, anchor.Target = command.Source, command.Target
+	case ShieldCommand:
+		anchor.Source, anchor.Target = command.Source, command.Target
+	case StatusCommand:
+		anchor.Source, anchor.Target = command.SourceOwner, command.Target
+	case RemoveStatusCommand:
+		anchor.Source, anchor.Target = command.SourceOwner, command.Target
+	case DispelStatusCommand:
+		anchor.Target = command.Target
+	case AttributeModifierCommand:
+		anchor.Source, anchor.Target = command.SourceOwner, command.Target
+	case ModifyStatusInstanceCommand:
+		anchor.Source, anchor.Target = command.Owner, command.Target
+	case ResourceCommand:
+		anchor.Target = command.Target
+	case TeleportCommand:
+		anchor.Target = command.Target
+		position := command.Destination
+		anchor.Position = &position
+	case KnockbackCommand:
+		anchor.Target = command.Target
+		position := command.From
+		anchor.Position = &position
+	case PullCommand:
+		anchor.Target = command.Target
+		position := command.Toward
+		anchor.Position = &position
+	case SpawnCommand:
+		anchor.Source = command.Owner
+		position := command.Position
+		anchor.Position = &position
+	case OwnedEntityCommand:
+		anchor.Source, anchor.Target = command.Owner, command.Target
+		position := command.Position
+		anchor.Position = &position
+	}
+	return anchor
 }
 
 func (runtime *Runtime) effectEventContext(cast *castInstance, effect EffectIndex) EventContext {

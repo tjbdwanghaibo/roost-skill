@@ -58,6 +58,11 @@ func (ir *skillIR) walkVisualRefs(visitor visualVisitor) {
 			visitor(visual)
 		}
 	})
+	ir.walkFlows(func(flow flowIR) {
+		if effectFlow, ok := flow.(*effectFlowIR); ok && effectFlow.process != nil && effectFlow.process.visual != nil {
+			visitor(effectFlow.process.visual)
+		}
+	})
 }
 
 func walkValue(value valueIR, visitor valueVisitor) {

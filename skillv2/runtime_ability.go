@@ -421,7 +421,7 @@ func (runtime *Runtime) emitAbilityChange(state *abilityState, property, operati
 		kind = "ability_enabled_changed"
 	}
 	event := RuntimeEvent{Tick: runtime.currentTick, Kind: kind, Entity: state.owner, Context: cloneEventContext(context), Ability: &AbilityChangeEvent{Owner: state.owner, Ability: state.handle, Property: property, Before: before, After: after, Operation: operation}}
-	runtime.runtimeEvents = append(runtime.runtimeEvents, event)
+	runtime.appendRuntimeEvent(event)
 	if cast := runtime.casts[context.CastID]; cast != nil {
 		cast.events = append(cast.events, cloneRuntimeEvent(event))
 	}

@@ -344,6 +344,7 @@ func (runtime *Runtime) collectHostEvents() {
 		if event.Cursor > runtime.eventCursor {
 			runtime.eventCursor = event.Cursor
 		}
+		runtime.recordStateEvent(event)
 		for _, castID := range castIDs {
 			cast := runtime.casts[CastID(castID)]
 			if cast.status == CastRunning || cast.status == CastSuspended {
@@ -471,9 +472,11 @@ func (runtime *Runtime) executeProcessStep(cast *castInstance, processID Process
 	if process == nil || process.Status != ProcessRunning {
 		return nil
 	}
-	_, err := runtime.stepProcessMotion(cast, process)
+	signals, err := runtime.stepProcessMotion(cast, process)
 	if err != nil {
 		return err
 	}
+	runtime.emitProcessPresentation(cast, process, PresentationProcessUpdate, "", "", cast.visibleRevision)
+	runtime.emitProcessSignals(cast, process, signals, cast.visibleRevision)
 	return nil
 }

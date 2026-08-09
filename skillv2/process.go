@@ -206,6 +206,7 @@ func (runtime *Runtime) stopProcess(cast *castInstance, process *ProcessInstance
 	process.Status = processStatusForStop(cause)
 	process.stopCause = cause
 	process.HostState.Active = false
+	runtime.emitProcessPresentation(cast, process, PresentationProcessStop, "", cause, receipt.Revision)
 	if process.Scope == ProcessScopeEntity {
 		process.Program = nil
 		process.inputs = nil

@@ -7,6 +7,7 @@ func (runtime *Runtime) drainHostEvents(cast *castInstance) {
 			runtime.eventCursor = event.Cursor
 		}
 		cast.events = append(cast.events, cloneRuntimeEvent(event))
+		runtime.recordStateEvent(event)
 		_ = runtime.dispatchEvent(event.Context)
 	}
 }
