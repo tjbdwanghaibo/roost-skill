@@ -1,8 +1,10 @@
 package skillsync
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/tjbdwanghaibo/cube-core/syncstream"
 	"github.com/tjbdwanghaibo/cube-skill/skillv2"
@@ -24,11 +26,11 @@ func TestProjectorBuildsStronglyTypedPackets(t *testing.T) {
 	if err != nil || !state.Full || state.Stream.Topic != TopicState {
 		t.Fatalf("state packet = %#v err=%v", state, err)
 	}
-	delta, err := projector.StateDeltaPacket(observer, 7, skillv2.StateEvent{Sequence: 9, Event: skillv2.RuntimeEvent{Kind: "damage", Tick: 3, Revision: 4}})
+	delta, err := projector.StateDeltaPacket(observer, 7, skillv2.StateMutation{Sequence: 9, Kind: skillv2.StateMutationClock, Tick: 3, WorldRevision: 4})
 	if err != nil || delta.Full || !delta.Critical {
 		t.Fatalf("delta packet = %#v err=%v", delta, err)
 	}
-	if _, err := projector.StateDeltaPacket(observer, 7, skillv2.StateEvent{}); !errors.Is(err, ErrRecordInvalid) {
+	if _, err := projector.StateDeltaPacket(observer, 7, skillv2.StateMutation{}); !errors.Is(err, ErrRecordInvalid) {
 		t.Fatalf("invalid delta error = %v", err)
 	}
 	presentation, err := projector.PresentationPacket(observer, 7, skillv2.PresentationEvent{Sequence: 10, Kind: skillv2.PresentationEffect, Tick: 3, WorldRevision: 4, GameplayDigest: "game", PresentationDigest: "view"})
@@ -53,7 +55,7 @@ func (consumer *recordingConsumer) ApplyStateSnapshot(int64, skillv2.RuntimeStat
 	consumer.snapshots++
 	return nil
 }
-func (consumer *recordingConsumer) ApplyStateDelta(int64, skillv2.StateEvent) error {
+func (consumer *recordingConsumer) ApplyStateDelta(int64, skillv2.StateMutation) error {
 	consumer.deltas++
 	return nil
 }
@@ -89,7 +91,7 @@ func TestApplierValidatesChainObserverAndManifestDependency(t *testing.T) {
 	}
 
 	missing, _ := projector.PresentationPacket(observer, 12, skillv2.PresentationEvent{Sequence: 1, Kind: skillv2.PresentationCast, PresentationDigest: "missing"})
-	missing.Sequence = 1
+	missing.Sequence, missing.Epoch = 1, manifest.Epoch
 	if _, err := applier.Apply(missing); !errors.Is(err, ErrManifestMissing) {
 		t.Fatalf("missing manifest error = %v", err)
 	}
@@ -152,5 +154,173 @@ func TestCoordinatorRequiresExplicitVisibilityPolicy(t *testing.T) {
 	})
 	if !errors.Is(err, ErrVisibilityRequired) {
 		t.Fatalf("visibility error = %v", err)
+	}
+}
+
+type reentrantStateConsumer struct {
+	applier *Applier
+	stream  syncstream.Stream
+	calls   int
+}
+
+func (consumer *reentrantStateConsumer) ApplyStateSnapshot(int64, skillv2.RuntimeStateSnapshot) error {
+	_ = consumer.applier.Sequence(consumer.stream)
+	consumer.calls++
+	return nil
+}
+func (consumer *reentrantStateConsumer) ApplyStateDelta(int64, skillv2.StateMutation) error {
+	_ = consumer.applier.Sequence(consumer.stream)
+	consumer.calls++
+	return nil
+}
+
+func TestApplierDoesNotHoldMutexDuringConsumerCallback(t *testing.T) {
+	observer := syncstream.Observer{ID: 8}
+	stream := syncstream.Stream{Topic: TopicState, Key: 4}
+	consumer := &reentrantStateConsumer{stream: stream}
+	applier, _ := NewApplier(ApplierOptions{Observer: observer, SchemaVersion: 1, State: consumer})
+	consumer.applier = applier
+	projector, _ := NewProjector(1)
+	history := syncstream.NewHistory(syncstream.HistoryOptions{Epoch: 9})
+	packet, _ := projector.StateSnapshotPacket(observer, stream.Key, skillv2.RuntimeStateSnapshot{})
+	packet, _ = history.Append(packet)
+	if _, err := applier.Apply(packet); err != nil || consumer.calls != 1 {
+		t.Fatalf("calls=%d err=%v", consumer.calls, err)
+	}
+}
+
+type testApplyTransaction struct {
+	commitErr error
+	commits   *int
+	rollbacks *int
+}
+
+func (transaction *testApplyTransaction) Commit() error {
+	if transaction.commitErr != nil {
+		return transaction.commitErr
+	}
+	*transaction.commits++
+	return nil
+}
+
+func (transaction *testApplyTransaction) Rollback() { *transaction.rollbacks++ }
+
+type transactionalStateConsumer struct {
+	recordingConsumer
+	commitErr error
+	commits   int
+	rollbacks int
+}
+
+func (consumer *transactionalStateConsumer) PrepareStateSnapshot(int64, skillv2.RuntimeStateSnapshot) (ApplyTransaction, error) {
+	return &testApplyTransaction{commitErr: consumer.commitErr, commits: &consumer.commits, rollbacks: &consumer.rollbacks}, nil
+}
+
+func (consumer *transactionalStateConsumer) PrepareStateDelta(int64, skillv2.StateMutation) (ApplyTransaction, error) {
+	return &testApplyTransaction{commitErr: consumer.commitErr, commits: &consumer.commits, rollbacks: &consumer.rollbacks}, nil
+}
+
+func TestTransactionalApplyRollsBackWithoutAdvancingEpochOrSequence(t *testing.T) {
+	observer := syncstream.Observer{ID: 18}
+	consumer := &transactionalStateConsumer{commitErr: errors.New("renderer unavailable")}
+	applier, err := NewApplier(ApplierOptions{Observer: observer, SchemaVersion: 1, State: consumer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector, _ := NewProjector(1)
+	packet, _ := projector.StateSnapshotPacket(observer, 2, skillv2.RuntimeStateSnapshot{})
+	packet.Epoch, packet.Sequence = 40, 1
+	if _, err := applier.Apply(packet); err == nil {
+		t.Fatal("expected transaction commit failure")
+	}
+	if applier.Epoch() != 0 || applier.Sequence(packet.Stream) != 0 || consumer.commits != 0 || consumer.rollbacks != 1 {
+		t.Fatalf("epoch=%d sequence=%d commits=%d rollbacks=%d", applier.Epoch(), applier.Sequence(packet.Stream), consumer.commits, consumer.rollbacks)
+	}
+	consumer.commitErr = nil
+	if result, err := applier.Apply(packet); err != nil || !result.Applied {
+		t.Fatalf("retry result=%#v err=%v", result, err)
+	}
+	if applier.Epoch() != 40 || applier.Sequence(packet.Stream) != 1 || consumer.commits != 1 {
+		t.Fatalf("epoch=%d sequence=%d commits=%d", applier.Epoch(), applier.Sequence(packet.Stream), consumer.commits)
+	}
+}
+
+type jsonSchemaMigrator struct{}
+
+func (jsonSchemaMigrator) Migrate(packet syncstream.Packet, target uint32) ([]byte, error) {
+	var value map[string]any
+	if err := json.Unmarshal(packet.Payload, &value); err != nil {
+		return nil, err
+	}
+	value["schema_version"] = target
+	return json.Marshal(value)
+}
+
+func TestSchemaNegotiationMigrationAndEpochSwitch(t *testing.T) {
+	if version, err := NegotiateSchema(SchemaRange{Min: 1, Max: 3}, SchemaRange{Min: 2, Max: 4}); err != nil || version != 3 {
+		t.Fatalf("schema=%d err=%v", version, err)
+	}
+	observer := syncstream.Observer{ID: 1}
+	consumer := &recordingConsumer{}
+	applier, _ := NewApplier(ApplierOptions{Observer: observer, SchemaVersion: 2, SupportedSchema: SchemaRange{Min: 1, Max: 2}, Migrator: jsonSchemaMigrator{}, Manifest: consumer})
+	projector, _ := NewProjector(1)
+	plan := skillv2.PresentationPlan{Identity: skillv2.ProgramIdentityView{PresentationDigest: "v1"}}
+	packet, _ := projector.ManifestPacket(observer, 1, plan)
+	packet.Epoch, packet.Sequence = 10, 1
+	if _, err := applier.Apply(packet); err != nil {
+		t.Fatal(err)
+	}
+	newEpoch := packet.Clone()
+	newEpoch.Epoch = 11
+	if _, err := applier.Apply(newEpoch); err != nil || applier.Epoch() != 11 {
+		t.Fatalf("epoch=%d err=%v", applier.Epoch(), err)
+	}
+	oldDelta := packet.Clone()
+	oldDelta.Full, oldDelta.BaseSequence, oldDelta.Sequence = false, 1, 2
+	if _, err := applier.Apply(oldDelta); !errors.Is(err, ErrEpochMismatch) {
+		t.Fatalf("old epoch error = %v", err)
+	}
+}
+
+func TestEntityVisibilityPolicyRedactsNestedTargets(t *testing.T) {
+	policy := EntityVisibilityPolicy{Visible: func(_ syncstream.Observer, entity skillv2.EntityID) (bool, error) { return entity != 99, nil }}
+	snapshot := skillv2.RuntimeStateSnapshot{Casts: []skillv2.CastStateSnapshot{{ID: 1, Caster: 1, PrimaryTarget: 99}, {ID: 2, Caster: 99}}}
+	filtered, err := policy.FilterStateSnapshot(syncstream.Observer{}, snapshot)
+	if err != nil || len(filtered.Casts) != 1 || filtered.Casts[0].PrimaryTarget != 0 {
+		t.Fatalf("filtered=%#v err=%v", filtered, err)
+	}
+	event := skillv2.PresentationEvent{Anchor: skillv2.PresentationAnchor{Source: 1, Target: 99}, PrimaryTarget: 99}
+	event, allowed, err := policy.FilterPresentation(syncstream.Observer{}, event)
+	if err != nil || !allowed || event.Anchor.Target != 0 || event.PrimaryTarget != 0 {
+		t.Fatalf("event=%#v allowed=%v err=%v", event, allowed, err)
+	}
+}
+
+func TestFileOutboxSurvivesRestartAndDeletesOnAck(t *testing.T) {
+	store, err := NewFileOutboxStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	box, err := NewOutbox(OutboxOptions{Store: store, RequireDurable: true, AckRetryInterval: time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	packet := syncstream.Packet{Observer: syncstream.Observer{ID: 2}, Stream: syncstream.Stream{Topic: TopicState, Key: 3}, Epoch: 7, Sequence: 1}
+	if err := box.Put(packet); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewOutbox(OutboxOptions{Store: store, RequireDurable: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restarted.Metrics().Pending != 1 {
+		t.Fatalf("pending=%d", restarted.Metrics().Pending)
+	}
+	if err := restarted.Acknowledge(packet.Observer, packet.Stream, packet.Epoch, packet.Sequence); err != nil {
+		t.Fatal(err)
+	}
+	third, err := NewOutbox(OutboxOptions{Store: store, RequireDurable: true})
+	if err != nil || third.Metrics().Pending != 0 {
+		t.Fatalf("pending=%d err=%v", third.Metrics().Pending, err)
 	}
 }

@@ -34,6 +34,17 @@ func TestRuntimeValueJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func BenchmarkApplyStateMutation(b *testing.B) {
+	snapshot := RuntimeStateSnapshot{}
+	mutation := StateMutation{Sequence: 1, Kind: StateMutationClock, Tick: 10, WorldRevision: 20}
+	b.ReportAllocs()
+	for index := 0; index < b.N; index++ {
+		if err := ApplyStateMutation(&snapshot, mutation); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestRuntimeStateSnapshotAndEventCursorAreComplete(t *testing.T) {
 	program, environment := compileRuntimeFixture(t, "simple_damage.json")
 	runtime := NewRuntime(runtimeTestHost(environment), RuntimeOptions{StateEventLimit: 1})
@@ -66,5 +77,30 @@ func TestRuntimeStateSnapshotAndEventCursorAreComplete(t *testing.T) {
 	decodedData, err := json.Marshal(decoded)
 	if err != nil || string(decodedData) != string(data) {
 		t.Fatalf("snapshot JSON round trip failed: %v", err)
+	}
+}
+
+func TestStateMutationsFoldExactlyIntoLaterSnapshot(t *testing.T) {
+	program, environment := compileRuntimeFixture(t, "simple_damage.json")
+	runtime := NewRuntime(runtimeTestHost(environment), RuntimeOptions{StateMutationLimit: 64})
+	before := runtime.StateSnapshot()
+	if _, err := runtime.Activate(program, CastInput{Caster: 1, Target: 2}); err != nil {
+		t.Fatal(err)
+	}
+	after := runtime.StateSnapshot()
+	batch := runtime.StateDeltas(before.LatestStateMutationSequence, 0)
+	if batch.CursorExpired || len(batch.Mutations) == 0 {
+		t.Fatalf("mutation batch = %#v", batch)
+	}
+	folded := before
+	for _, mutation := range batch.Mutations {
+		if err := ApplyStateMutation(&folded, mutation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, _ := json.Marshal(after)
+	got, _ := json.Marshal(folded)
+	if string(got) != string(want) {
+		t.Fatalf("folded state does not equal snapshot\ngot  %s\nwant %s", got, want)
 	}
 }

@@ -281,12 +281,26 @@ Host command/result 和 revision。这样通常不需要在整条链路中盲目
    canonical manifest；
 2. `presentation.go`、`presentation_assets.go`：静态 mount、动态生命周期事件和客户端
    资源解析边界；
-3. `runtime_sync.go`、`runtime_value_json.go`：权威全量状态、强类型 delta 和游标过期；
+3. `runtime_sync.go`、`runtime_mutation.go`、`runtime_value_json.go`：权威全量状态、规范
+   mutation reducer 和游标过期；
 4. `skillsync/skillsync.go`：三类业务 record 如何进入通用 Packet；
-5. `skillsync/coordinator.go`：observer 策略、source cursor、History 和自动恢复；
-6. `skillsync/applier.go`：客户端 schema/sequence/manifest 校验与幂等应用；
-7. `cube-core/syncstream`：网络序号、ACK、replay、full fallback、持久化与指标；
-8. `cube-kit/syncstream`：NATS/JetStream envelope、observer 隔离和背压。
+5. `skillsync/visibility.go`、`coordinator.go`、`outbox.go`：observer 过滤、source cursor、
+   durable pending 和自动恢复；
+6. `skillsync/applier.go`、`schema.go`：Epoch/schema/sequence/manifest 校验和事务应用；
+7. `presentation_recovery.go`、`presentation_asset_cache.go`：持续表现恢复、可信目录、
+   preload/fallback/ref-count/unload；
+8. `cube-core/syncstream`：Epoch、WAL/checkpoint、ACK 裁剪、replay/full fallback 和生命周期；
+9. `cube-kit/syncstream`：确认发布、gzip、分片、SHA-256、有界重组和背压。
+
+建议按四个小实验验证自己确实理解了实现：
+
+1. 在 `runtime_sync_test.go` 里从旧 snapshot 折叠全部 `StateMutation`，比较两份规范 JSON；
+2. 在 `skillsync_test.go` 让事务 Consumer 第一次 Commit 失败，确认 Epoch/sequence 都不推进，
+   第二次重试只生效一次；
+3. 在 `syncstream_test.go` ACK 并裁剪所有 retained packet，重启 journal 后继续 Append，确认
+   Sequence/BaseSequence 没有回退；
+4. 运行 `integration/sync-e2e`，沿调用栈观察确认失败、磁盘恢复、分片重组、Applier 和 ACK
+   清理。这个测试是三仓边界是否真正契合的最终阅读入口。
 
 完整生产接入、发布与故障注入流程见
 [Visual 与数据同步生产指南](visual-sync-production-guide.md)。

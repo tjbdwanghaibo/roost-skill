@@ -51,13 +51,11 @@ type StateSnapshot = skillv2.RuntimeStateSnapshot
 type StateRecord struct {
 	Header
 	Snapshot *skillv2.RuntimeStateSnapshot `json:"snapshot,omitempty"`
-	Delta    *skillv2.StateEvent           `json:"delta,omitempty"`
+	Delta    *skillv2.StateMutation        `json:"delta,omitempty"`
 }
 
 type PresentationReset struct {
-	LatestPresentationSequence uint64                `json:"latest_presentation_sequence"`
-	Tick                       skillv2.Tick          `json:"tick"`
-	WorldRevision              skillv2.WorldRevision `json:"world_revision"`
+	Recovery skillv2.PresentationRecoverySnapshot `json:"recovery"`
 }
 
 type PresentationRecord struct {
@@ -93,13 +91,13 @@ func (projector Projector) StateSnapshotPacket(observer syncstream.Observer, key
 	return projector.packet(observer, key, TopicState, true, true, record)
 }
 
-func (projector Projector) StateDeltaPacket(observer syncstream.Observer, key int64, delta skillv2.StateEvent) (syncstream.Packet, error) {
-	if delta.Sequence == 0 || delta.Event.Kind == "" {
+func (projector Projector) StateDeltaPacket(observer syncstream.Observer, key int64, delta skillv2.StateMutation) (syncstream.Packet, error) {
+	if delta.Sequence == 0 || delta.Kind == "" {
 		return syncstream.Packet{}, fmt.Errorf("%w: state delta requires sequence and event kind", ErrRecordInvalid)
 	}
 	record := StateRecord{Header: Header{
 		SchemaVersion: projector.SchemaVersion, Kind: RecordStateDelta,
-		Tick: delta.Event.Tick, WorldRevision: delta.Event.Revision,
+		Tick: delta.Tick, WorldRevision: delta.WorldRevision,
 	}, Delta: &delta}
 	return projector.packet(observer, key, TopicState, false, true, record)
 }
@@ -116,8 +114,8 @@ func (projector Projector) PresentationPacket(observer syncstream.Observer, key 
 	return projector.packet(observer, key, TopicPresentation, false, false, record)
 }
 
-func (projector Projector) PresentationResetPacket(observer syncstream.Observer, key int64, snapshot skillv2.RuntimeStateSnapshot) (syncstream.Packet, error) {
-	reset := PresentationReset{LatestPresentationSequence: snapshot.LatestPresentationSequence, Tick: snapshot.Tick, WorldRevision: snapshot.WorldRevision}
+func (projector Projector) PresentationResetPacket(observer syncstream.Observer, key int64, snapshot skillv2.PresentationRecoverySnapshot) (syncstream.Packet, error) {
+	reset := PresentationReset{Recovery: snapshot}
 	record := PresentationRecord{Header: Header{SchemaVersion: projector.SchemaVersion, Kind: RecordPresentationReset, Tick: snapshot.Tick, WorldRevision: snapshot.WorldRevision}, Reset: &reset}
 	return projector.packet(observer, key, TopicPresentation, true, true, record)
 }

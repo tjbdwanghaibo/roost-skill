@@ -126,17 +126,18 @@ type RuntimeStateExtensionProvider interface {
 }
 
 type RuntimeStateSnapshot struct {
-	Tick                       Tick                      `json:"tick"`
-	WorldRevision              WorldRevision             `json:"world_revision"`
-	Casts                      []CastStateSnapshot       `json:"casts,omitempty"`
-	Cooldowns                  []CooldownStateSnapshot   `json:"cooldowns,omitempty"`
-	SkillResources             []SkillResourceSnapshot   `json:"skill_resources,omitempty"`
-	Abilities                  []AbilityStateSnapshot    `json:"abilities,omitempty"`
-	Processes                  []ProcessStateSnapshot    `json:"processes,omitempty"`
-	ActivePolicies             []ActivePolicySnapshot    `json:"active_policies,omitempty"`
-	PersistentStates           []PersistentStateSnapshot `json:"persistent_states,omitempty"`
-	LatestStateEventSequence   uint64                    `json:"latest_state_event_sequence"`
-	LatestPresentationSequence uint64                    `json:"latest_presentation_sequence"`
+	Tick                        Tick                      `json:"tick"`
+	WorldRevision               WorldRevision             `json:"world_revision"`
+	Casts                       []CastStateSnapshot       `json:"casts,omitempty"`
+	Cooldowns                   []CooldownStateSnapshot   `json:"cooldowns,omitempty"`
+	SkillResources              []SkillResourceSnapshot   `json:"skill_resources,omitempty"`
+	Abilities                   []AbilityStateSnapshot    `json:"abilities,omitempty"`
+	Processes                   []ProcessStateSnapshot    `json:"processes,omitempty"`
+	ActivePolicies              []ActivePolicySnapshot    `json:"active_policies,omitempty"`
+	PersistentStates            []PersistentStateSnapshot `json:"persistent_states,omitempty"`
+	LatestStateEventSequence    uint64                    `json:"latest_state_event_sequence"`
+	LatestStateMutationSequence uint64                    `json:"latest_state_mutation_sequence"`
+	LatestPresentationSequence  uint64                    `json:"latest_presentation_sequence"`
 }
 
 func (runtime *Runtime) appendRuntimeEvent(event RuntimeEvent) {
@@ -189,7 +190,16 @@ func cloneStateEvents(events []StateEvent) []StateEvent {
 func (runtime *Runtime) StateSnapshot() RuntimeStateSnapshot {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
-	snapshot := RuntimeStateSnapshot{Tick: runtime.currentTick, WorldRevision: runtime.host.CurrentRevision(), LatestStateEventSequence: runtime.stateEventSequence, LatestPresentationSequence: runtime.presentationSequence}
+	runtime.refreshStateMutationsLocked()
+	return runtime.stateSnapshotLocked()
+}
+
+func (runtime *Runtime) stateSnapshotLocked() RuntimeStateSnapshot {
+	revision := WorldRevision(0)
+	if runtime.host != nil {
+		revision = runtime.host.CurrentRevision()
+	}
+	snapshot := RuntimeStateSnapshot{Tick: runtime.currentTick, WorldRevision: revision, LatestStateEventSequence: runtime.stateEventSequence, LatestStateMutationSequence: runtime.stateMutationSequence, LatestPresentationSequence: runtime.presentationSequence}
 	castIDs := make([]int, 0, len(runtime.casts))
 	for id := range runtime.casts {
 		castIDs = append(castIDs, int(id))

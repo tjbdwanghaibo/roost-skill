@@ -12,7 +12,7 @@ Skill JSON
 immutable Program ── InspectPresentationPlan ── VisualAssetResolver ── renderer assets
    │
    ▼
-Runtime ── StateSnapshot / StateEvents / PollPresentation
+Runtime ── StateSnapshot / StateDeltas / PresentationSnapshot / PollPresentation
    │
    ▼
 skillsync.Coordinator ── cube-core/syncstream.History ── cube-kit/syncstream
@@ -95,10 +95,10 @@ entry 都解析到非空 asset key，最后验证所有 mount 的 visual index�
 - Host 可选提供的 persistent/shared state；
 - 最新 state-event 和 presentation sequence。
 
-`Runtime.StateEvents(after, limit)` 返回强类型 `StateEvent`，其中 payload 是完整
-`RuntimeEvent`，不是 `change string + RawMessage`。RuntimeValue 有严格 JSON 编解码，
-覆盖 optional、quantity、entity/list、position/path、ability/status、snapshot token、
-process 和 effect result。
+复制协议使用 `Runtime.StateDeltas(after, limit)` 返回的封闭 `StateMutation` union。
+cast、cooldown、resource、ability、process、policy、persistent state 均有明确的
+upsert/remove 变体；`ApplyStateMutation` 折叠后的规范 JSON 必须与新快照完全一致。
+`CursorExpired=true` 时必须发送 full snapshot。原始 `StateEvents` 只用于诊断。
 
 这份快照不替代通用世界同步。角色坐标、血量等完整世界模型仍应由游戏自己的实体
 同步 topic 负责；Skill topic 只同步技能执行和拥有的状态。
@@ -125,7 +125,7 @@ coordinator, err := skillsync.NewCoordinator(skillsync.CoordinatorOptions{
 1. 编译并注册 Program：`RegisterProgram(key, program)`；
 2. 新 observer 加入时发布 manifest full 和 state snapshot；
 3. 每个逻辑 tick 提交 Runtime 后调用 `Flush(observer, key)`；
-4. 客户端处理成功后提交网络 Packet.Sequence ACK；
+4. 客户端处理成功后提交 `Epoch + Packet.Sequence` ACK；
 5. 重连提交 ResyncRequest，调用 `Recover`；
 6. 定期持久化 `History.Export()`，重启时在接收流量前 `Import()`。
 
@@ -270,3 +270,84 @@ go test -race ./syncstream -count=1
 
 上线门槛：普通测试、fixture、vet、race 全绿；故障矩阵全绿；指标和告警已接入；History
 持久化恢复演练成功；客户端能够处理 full/reset；不存在 nil visibility 或无限队列配置。
+
+## 11. v1.1.0 生产闭环补充
+
+本节覆盖旧章节中基于“定期 Export/Import、发布后等待 Resync”的保守描述。当前正式
+可靠链路如下：
+
+1. `History.Append` 在修改内存前把 mutation 写入 `HistoryJournal`；Packet 自动携带随机
+   非零 Epoch。ACK、删除、空闲清理和 Epoch 轮换也遵守 write-ahead 顺序。
+2. `FileHistoryJournal` 使用不可变的分代 checkpoint/WAL。它先 fsync 下一代空 WAL，再
+   原子发布唯一名称的 checkpoint；恢复只组合相同 generation。最新代损坏会阻止启动，
+   上一代仅供运维显式恢复，协议不会静默回退并丢失已确认进度。
+3. `Outbox` 在 broker 接受后仍保留 Packet，直到客户端 ACK。`FileOutboxStore` 提供进程
+   重启恢复；`Reconcile(History.Export())` 修复 History 已提交、outbox 尚未写入的窗口。
+4. 建议启用 `PruneAcknowledged`，在 ACK durable 后释放历史 Packet；`Pruned` 与容量不足
+   导致的 `Dropped` 分开统计。observer 离开调用 `CloseObserver`，定期调用 `SweepIdle`。
+5. 生产 Publisher 设置 `RequireConfirmation=true`、`CompressionThreshold`、
+   `MaxFrameBytes`。订阅端限制 envelope/chunk/assembly/decoded 大小和 TTL，并强制 checksum。
+6. 新 Epoch 的第一包必须为 full。Schema 用 `SupportedSchema` 协商，跨版本必须配置
+   `SchemaMigrator`；不能把未知 schema 当成当前结构直接解码。
+7. 客户端优先实现 `TransactionalManifestConsumer`、`TransactionalStateConsumer` 和
+   `TransactionalPresentationConsumer`。Prepare 只准备，Commit 原子生效，Rollback 幂等；
+   Commit 失败时 Applier 不推进 Epoch、网络 sequence 或 source sequence。
+8. Visual 生产加载使用 `TrustedVisualCatalogs + VisualPlanCache`。目录 revision/digest
+   不在信任集合时，在任何资源加载之前拒绝；缓存负责并行 preload、fallback、引用计数、
+   unload、空闲淘汰和 catalog 失效。重连用 `PresentationSnapshot` 恢复仍持续的 cast/process
+   表现，瞬时 effect 不伪造重放。
+
+### 11.1 生产构造基线
+
+```go
+journal, _ := syncstream.NewFileHistoryJournal(historyDir, 0)
+history, _ := syncstream.NewHistoryWithJournal(syncstream.HistoryOptions{
+    SchemaVersion: 1,
+    MaxPacketsPerStream: 1024,
+    MaxPayloadBytes: 1 << 20,
+    MaxStreams: 100000,
+    IdleTTL: 30 * time.Minute,
+    PruneAcknowledged: true,
+}, journal)
+
+store, _ := skillsync.NewFileOutboxStore(outboxDir)
+outbox, _ := skillsync.NewOutbox(skillsync.OutboxOptions{
+    Store: store, RequireDurable: true,
+})
+
+publisher, _ := kitsync.NewPublisherWithOptions(bus, kitsync.PublisherOptions{
+    RequireConfirmation: true,
+    CompressionThreshold: 4 << 10,
+    MaxFrameBytes: 256 << 10,
+})
+```
+
+必须为 `History.Health`、`Coordinator.Health`（包含 Outbox）和 kit Publisher/Subscriber
+指标接入告警。重点观察：history dropped、outbox pending age/失败、assembly 超限、checksum
+失败、visibility failure、schema/epoch mismatch 和 snapshot recovery 突增。
+
+### 11.2 完整测试入口
+
+```powershell
+# 三个发布模块：在本地临时 go.work 中组合，生产 go.mod 不含 replace
+go test ./... -count=1
+go vet ./...
+go test -race ./... -count=1
+
+# 基准
+go test ./syncstream -run '^$' -bench . -benchmem       # cube-core / cube-kit
+go test ./skillv2 -run '^$' -bench . -benchmem          # cube-skill
+
+# 跨模块：确认失败 -> 重启 -> WAL/outbox 恢复 -> gzip/分片/checksum -> ACK/裁剪
+cd cube-skill/integration/sync-e2e
+go test ./... -count=1
+
+# 发布前 30 分钟 soak（可先用 5s 验证任务配置）
+$env:CUBE_SYNC_SOAK='1'
+$env:CUBE_SYNC_SOAK_DURATION='30m'
+go test ./... -run TestProtocolSoak -count=1 -timeout 35m
+```
+
+发布顺序为 `cube-core v1.1.0 → cube-skill → cube-kit → 业务服务/客户端`。生产模块只依赖
+语义版本；相对 `replace` 仅存在于 `integration/sync-e2e` 测试模块。正式发布 tag 前应先用
+临时 workspace 执行三仓全量测试，然后在无 workspace 环境验证已发布版本可解析。

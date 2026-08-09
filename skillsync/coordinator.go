@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/tjbdwanghaibo/cube-core/syncstream"
 	"github.com/tjbdwanghaibo/cube-skill/skillv2"
@@ -18,44 +20,41 @@ var (
 	ErrTopicUnsupported   = errors.New("skillsync: topic is unsupported")
 )
 
-type PacketPublisher interface {
-	Publish(syncstream.Packet) error
-}
+type PacketPublisher interface{ Publish(syncstream.Packet) error }
 
-// VisibilityPolicy makes per-observer authorization an explicit server-side
-// dependency. Implementations must return detached snapshots if they mutate
-// slices while filtering.
 type VisibilityPolicy interface {
-	FilterStateSnapshot(syncstream.Observer, skillv2.RuntimeStateSnapshot) skillv2.RuntimeStateSnapshot
-	AllowStateEvent(syncstream.Observer, skillv2.StateEvent) bool
-	AllowPresentation(syncstream.Observer, skillv2.PresentationEvent) bool
+	FilterStateSnapshot(syncstream.Observer, skillv2.RuntimeStateSnapshot) (skillv2.RuntimeStateSnapshot, error)
+	FilterStateMutation(syncstream.Observer, skillv2.StateMutation) (skillv2.StateMutation, bool, error)
+	FilterPresentation(syncstream.Observer, skillv2.PresentationEvent) (skillv2.PresentationEvent, bool, error)
 }
 
-// AllowAllVisibility is intentionally explicit; passing nil is rejected.
 type AllowAllVisibility struct{}
 
-func (AllowAllVisibility) FilterStateSnapshot(_ syncstream.Observer, snapshot skillv2.RuntimeStateSnapshot) skillv2.RuntimeStateSnapshot {
-	return snapshot
+func (AllowAllVisibility) FilterStateSnapshot(_ syncstream.Observer, snapshot skillv2.RuntimeStateSnapshot) (skillv2.RuntimeStateSnapshot, error) {
+	return snapshot, nil
 }
-func (AllowAllVisibility) AllowStateEvent(syncstream.Observer, skillv2.StateEvent) bool { return true }
-func (AllowAllVisibility) AllowPresentation(syncstream.Observer, skillv2.PresentationEvent) bool {
-	return true
+func (AllowAllVisibility) FilterStateMutation(_ syncstream.Observer, mutation skillv2.StateMutation) (skillv2.StateMutation, bool, error) {
+	return mutation, true, nil
+}
+func (AllowAllVisibility) FilterPresentation(_ syncstream.Observer, event skillv2.PresentationEvent) (skillv2.PresentationEvent, bool, error) {
+	return event, true, nil
 }
 
 type CoordinatorOptions struct {
-	Runtime            *skillv2.Runtime
-	History            *syncstream.History
-	Publisher          PacketPublisher
-	Projector          Projector
-	Visibility         VisibilityPolicy
-	MaxPacketsPerFlush int
+	Runtime              *skillv2.Runtime
+	History              *syncstream.History
+	Publisher            PacketPublisher
+	Projector            Projector
+	Visibility           VisibilityPolicy
+	Outbox               *Outbox
+	RequireDurableOutbox bool
+	MaxPacketsPerFlush   int
 }
 
 type observerKey struct {
 	observer syncstream.Observer
 	key      int64
 }
-
 type sourceCursor struct {
 	state        uint64
 	presentation uint64
@@ -65,23 +64,33 @@ type CoordinatorMetrics struct {
 	Published          uint64
 	PublishFailures    uint64
 	Filtered           uint64
+	VisibilityFailures uint64
 	SnapshotRecoveries uint64
 }
 
-// Coordinator owns source cursors and converts retained Runtime events into
-// recoverable syncstream packets. A publish failure never loses a source event:
-// once appended, it remains recoverable from History.
+type coordinatorCounters struct {
+	published          atomic.Uint64
+	publishFailures    atomic.Uint64
+	filtered           atomic.Uint64
+	visibilityFailures atomic.Uint64
+	snapshotRecoveries atomic.Uint64
+}
+
+// Coordinator serializes preparation per observer/key but never holds its
+// global mutex while invoking VisibilityPolicy, PacketPublisher, or Runtime.
 type Coordinator struct {
-	mutex      sync.Mutex
+	mutex      sync.RWMutex
 	runtime    *skillv2.Runtime
 	history    *syncstream.History
 	publisher  PacketPublisher
 	projector  Projector
 	visibility VisibilityPolicy
+	outbox     *Outbox
 	maxPackets int
 	cursors    map[observerKey]sourceCursor
 	plans      map[int64]skillv2.PresentationPlan
-	metrics    CoordinatorMetrics
+	viewLocks  map[observerKey]*sync.Mutex
+	counters   coordinatorCounters
 }
 
 func NewCoordinator(options CoordinatorOptions) (*Coordinator, error) {
@@ -103,152 +112,227 @@ func NewCoordinator(options CoordinatorOptions) (*Coordinator, error) {
 	if options.MaxPacketsPerFlush <= 0 {
 		options.MaxPacketsPerFlush = 256
 	}
-	return &Coordinator{
-		runtime: options.Runtime, history: options.History, publisher: options.Publisher,
-		projector: options.Projector, visibility: options.Visibility, maxPackets: options.MaxPacketsPerFlush,
-		cursors: make(map[observerKey]sourceCursor), plans: make(map[int64]skillv2.PresentationPlan),
-	}, nil
+	if options.Outbox == nil {
+		var err error
+		options.Outbox, err = NewOutbox(OutboxOptions{RequireDurable: options.RequireDurableOutbox})
+		if err != nil {
+			return nil, err
+		}
+	} else if options.RequireDurableOutbox && options.Outbox.store == nil {
+		return nil, ErrOutboxStoreRequired
+	}
+	if err := options.Outbox.Reconcile(options.History.Export()); err != nil {
+		return nil, err
+	}
+	return &Coordinator{runtime: options.Runtime, history: options.History, publisher: options.Publisher, projector: options.Projector, visibility: options.Visibility, outbox: options.Outbox, maxPackets: options.MaxPacketsPerFlush, cursors: make(map[observerKey]sourceCursor), plans: make(map[int64]skillv2.PresentationPlan), viewLocks: make(map[observerKey]*sync.Mutex)}, nil
+}
+
+func (coordinator *Coordinator) viewLock(key observerKey) *sync.Mutex {
+	coordinator.mutex.Lock()
+	defer coordinator.mutex.Unlock()
+	lock := coordinator.viewLocks[key]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		coordinator.viewLocks[key] = lock
+	}
+	return lock
 }
 
 func (coordinator *Coordinator) RegisterProgram(key int64, program *skillv2.Program) {
 	coordinator.mutex.Lock()
-	defer coordinator.mutex.Unlock()
 	coordinator.plans[key] = skillv2.InspectPresentationPlan(program)
+	coordinator.mutex.Unlock()
+}
+
+func (coordinator *Coordinator) plan(key int64) (skillv2.PresentationPlan, bool) {
+	coordinator.mutex.RLock()
+	defer coordinator.mutex.RUnlock()
+	plan, ok := coordinator.plans[key]
+	return plan, ok
+}
+
+func (coordinator *Coordinator) cursor(key observerKey) sourceCursor {
+	coordinator.mutex.RLock()
+	defer coordinator.mutex.RUnlock()
+	return coordinator.cursors[key]
+}
+func (coordinator *Coordinator) setCursor(key observerKey, cursor sourceCursor) {
+	coordinator.mutex.Lock()
+	coordinator.cursors[key] = cursor
+	coordinator.mutex.Unlock()
 }
 
 func (coordinator *Coordinator) PublishManifest(observer syncstream.Observer, key int64) error {
-	coordinator.mutex.Lock()
-	defer coordinator.mutex.Unlock()
-	plan, ok := coordinator.plans[key]
+	view := observerKey{observer, key}
+	lock := coordinator.viewLock(view)
+	lock.Lock()
+	plan, ok := coordinator.plan(key)
 	if !ok {
+		lock.Unlock()
 		return ErrManifestMissing
 	}
 	packet, err := coordinator.projector.ManifestPacket(observer, key, plan)
+	if err == nil {
+		_, err = coordinator.appendPending(packet)
+	}
+	lock.Unlock()
 	if err != nil {
 		return err
 	}
-	return coordinator.appendAndPublish(packet)
+	return coordinator.publishDue(observer, syncstream.Stream{Topic: TopicManifest, Key: key})
 }
 
 func (coordinator *Coordinator) PublishSnapshot(observer syncstream.Observer, key int64) error {
-	coordinator.mutex.Lock()
-	defer coordinator.mutex.Unlock()
-	snapshot := coordinator.visibility.FilterStateSnapshot(observer, coordinator.runtime.StateSnapshot())
+	view := observerKey{observer, key}
+	lock := coordinator.viewLock(view)
+	lock.Lock()
+	snapshot, err := coordinator.visibility.FilterStateSnapshot(observer, coordinator.runtime.StateSnapshot())
+	if err != nil {
+		coordinator.counters.visibilityFailures.Add(1)
+		lock.Unlock()
+		return err
+	}
 	packet, err := coordinator.projector.StateSnapshotPacket(observer, key, snapshot)
+	if err == nil {
+		_, err = coordinator.appendPending(packet)
+	}
+	if err == nil {
+		cursor := coordinator.cursor(view)
+		cursor.state = snapshot.LatestStateMutationSequence
+		coordinator.setCursor(view, cursor)
+	}
+	lock.Unlock()
 	if err != nil {
 		return err
 	}
-	packet, err = coordinator.history.Append(packet)
-	if err != nil {
-		return err
-	}
-	cursor := coordinator.cursors[observerKey{observer: observer, key: key}]
-	cursor.state = snapshot.LatestStateEventSequence
-	coordinator.cursors[observerKey{observer: observer, key: key}] = cursor
-	return coordinator.publish(packet)
+	return coordinator.publishDue(observer, syncstream.Stream{Topic: TopicState, Key: key})
 }
 
-// Flush publishes up to MaxPacketsPerFlush across state and presentation while
-// retaining independent source cursors for each observer.
 func (coordinator *Coordinator) Flush(observer syncstream.Observer, key int64) error {
-	coordinator.mutex.Lock()
-	defer coordinator.mutex.Unlock()
-	cursorKey := observerKey{observer: observer, key: key}
-	cursor := coordinator.cursors[cursorKey]
-	remaining := coordinator.maxPackets
+	view := observerKey{observer, key}
+	lock := coordinator.viewLock(view)
+	lock.Lock()
+	err := coordinator.prepareFlush(view)
+	lock.Unlock()
+	if err != nil {
+		return err
+	}
+	return coordinator.publishObserver(observer)
+}
 
-	state := coordinator.runtime.StateEvents(cursor.state, remaining)
+func (coordinator *Coordinator) prepareFlush(view observerKey) error {
+	cursor := coordinator.cursor(view)
+	remaining := coordinator.maxPackets
+	state := coordinator.runtime.StateDeltas(cursor.state, remaining)
 	if state.CursorExpired {
-		snapshot := coordinator.visibility.FilterStateSnapshot(observer, coordinator.runtime.StateSnapshot())
-		packet, err := coordinator.projector.StateSnapshotPacket(observer, key, snapshot)
+		snapshot, err := coordinator.visibility.FilterStateSnapshot(view.observer, coordinator.runtime.StateSnapshot())
+		if err != nil {
+			coordinator.counters.visibilityFailures.Add(1)
+			return err
+		}
+		packet, err := coordinator.projector.StateSnapshotPacket(view.observer, view.key, snapshot)
 		if err != nil {
 			return err
 		}
-		packet, err = coordinator.history.Append(packet)
-		if err != nil {
+		if _, err = coordinator.appendPending(packet); err != nil {
 			return err
 		}
-		cursor.state = snapshot.LatestStateEventSequence
-		coordinator.cursors[cursorKey] = cursor
-		coordinator.metrics.SnapshotRecoveries++
-		if err := coordinator.publish(packet); err != nil {
-			return err
-		}
+		cursor.state = snapshot.LatestStateMutationSequence
+		coordinator.setCursor(view, cursor)
+		coordinator.counters.snapshotRecoveries.Add(1)
 		remaining--
 		if remaining == 0 {
 			return nil
 		}
 	} else {
-		for _, event := range state.Events {
-			if !coordinator.visibility.AllowStateEvent(observer, event) {
-				cursor.state = event.Sequence
-				coordinator.cursors[cursorKey] = cursor
-				coordinator.metrics.Filtered++
+		for _, mutation := range state.Mutations {
+			filtered, allowed, err := coordinator.visibility.FilterStateMutation(view.observer, mutation)
+			if err != nil {
+				coordinator.counters.visibilityFailures.Add(1)
+				return err
+			}
+			if !allowed {
+				cursor.state = mutation.Sequence
+				coordinator.setCursor(view, cursor)
+				coordinator.counters.filtered.Add(1)
 				continue
 			}
-			packet, err := coordinator.projector.StateDeltaPacket(observer, key, event)
+			packet, err := coordinator.projector.StateDeltaPacket(view.observer, view.key, filtered)
 			if err != nil {
 				return err
 			}
-			packet, err = coordinator.history.Append(packet)
-			if err != nil {
+			if _, err = coordinator.appendPending(packet); err != nil {
 				return err
 			}
-			cursor.state = event.Sequence
-			coordinator.cursors[cursorKey] = cursor
+			cursor.state = mutation.Sequence
+			coordinator.setCursor(view, cursor)
 			remaining--
-			if err := coordinator.publish(packet); err != nil {
-				return err
-			}
 			if remaining == 0 {
 				return nil
 			}
 		}
 	}
-
 	presentation := coordinator.runtime.PollPresentation(cursor.presentation, remaining)
 	if presentation.CursorExpired {
-		snapshot := coordinator.runtime.StateSnapshot()
-		packet, err := coordinator.projector.PresentationResetPacket(observer, key, snapshot)
+		snapshot := coordinator.runtime.PresentationSnapshot()
+		packet, err := coordinator.projector.PresentationResetPacket(view.observer, view.key, snapshot)
 		if err != nil {
 			return err
 		}
-		packet, err = coordinator.history.Append(packet)
-		if err != nil {
+		if _, err = coordinator.appendPending(packet); err != nil {
 			return err
 		}
 		cursor.presentation = snapshot.LatestPresentationSequence
-		coordinator.cursors[cursorKey] = cursor
-		coordinator.metrics.SnapshotRecoveries++
-		return coordinator.publish(packet)
+		coordinator.setCursor(view, cursor)
+		coordinator.counters.snapshotRecoveries.Add(1)
+		return nil
 	}
 	for _, event := range presentation.Events {
-		if !coordinator.visibility.AllowPresentation(observer, event) {
+		filtered, allowed, err := coordinator.visibility.FilterPresentation(view.observer, event)
+		if err != nil {
+			coordinator.counters.visibilityFailures.Add(1)
+			return err
+		}
+		if !allowed {
 			cursor.presentation = event.Sequence
-			coordinator.cursors[cursorKey] = cursor
-			coordinator.metrics.Filtered++
+			coordinator.setCursor(view, cursor)
+			coordinator.counters.filtered.Add(1)
 			continue
 		}
-		packet, err := coordinator.projector.PresentationPacket(observer, key, event)
+		packet, err := coordinator.projector.PresentationPacket(view.observer, view.key, filtered)
 		if err != nil {
 			return err
 		}
-		packet, err = coordinator.history.Append(packet)
-		if err != nil {
+		if _, err = coordinator.appendPending(packet); err != nil {
 			return err
 		}
 		cursor.presentation = event.Sequence
-		coordinator.cursors[cursorKey] = cursor
-		if err := coordinator.publish(packet); err != nil {
-			return err
-		}
+		coordinator.setCursor(view, cursor)
 	}
 	return nil
 }
 
-// Acknowledge records client progress for diagnostics and recovery decisions.
-func (coordinator *Coordinator) Acknowledge(observer syncstream.Observer, stream syncstream.Stream, sequence uint64) error {
-	return coordinator.history.Acknowledge(observer, stream, sequence)
+func (coordinator *Coordinator) appendPending(packet syncstream.Packet) (syncstream.Packet, error) {
+	packet, err := coordinator.history.Append(packet)
+	if err != nil {
+		return syncstream.Packet{}, err
+	}
+	if err := coordinator.outbox.Put(packet); err != nil {
+		// History is the authoritative WAL. Reconciliation closes the small
+		// history->outbox crash window without generating a duplicate source
+		// mutation on the next flush.
+		if reconcileErr := coordinator.outbox.Reconcile(coordinator.history.Export()); reconcileErr != nil {
+			return syncstream.Packet{}, errors.Join(err, reconcileErr)
+		}
+	}
+	return packet, nil
+}
+
+func (coordinator *Coordinator) Acknowledge(observer syncstream.Observer, stream syncstream.Stream, epoch, sequence uint64) error {
+	if err := coordinator.history.AcknowledgeEpoch(observer, stream, epoch, sequence); err != nil {
+		return err
+	}
+	return coordinator.outbox.Acknowledge(observer, stream, epoch, sequence)
 }
 
 type snapshotProviderFunc func(syncstream.ResyncRequest) (syncstream.Packet, error)
@@ -257,63 +341,101 @@ func (provider snapshotProviderFunc) Snapshot(request syncstream.ResyncRequest) 
 	return provider(request)
 }
 
-// Recover replays retained packets or automatically produces a topic-specific
-// full snapshot, then publishes the result in order.
 func (coordinator *Coordinator) Recover(request syncstream.ResyncRequest) (syncstream.ResyncResult, error) {
-	coordinator.mutex.Lock()
-	defer coordinator.mutex.Unlock()
+	view := observerKey{request.Observer, request.Stream.Key}
+	lock := coordinator.viewLock(view)
+	lock.Lock()
 	result, err := coordinator.history.Recover(request, snapshotProviderFunc(coordinator.snapshotPacket))
+	if err == nil {
+		for _, packet := range result.Packets {
+			if putErr := coordinator.outbox.Put(packet); putErr != nil {
+				err = putErr
+				break
+			}
+		}
+	}
+	lock.Unlock()
 	if err != nil {
 		return result, err
 	}
 	if result.Reason != syncstream.ResyncNone && len(result.Packets) == 1 && result.Packets[0].Full {
-		coordinator.metrics.SnapshotRecoveries++
+		coordinator.counters.snapshotRecoveries.Add(1)
 	}
-	for _, packet := range result.Packets {
-		if err := coordinator.publish(packet); err != nil {
-			return result, err
-		}
-	}
-	return result, nil
+	err = coordinator.publishNow(request.Observer, request.Stream)
+	return result, err
 }
 
 func (coordinator *Coordinator) snapshotPacket(request syncstream.ResyncRequest) (syncstream.Packet, error) {
 	switch request.Stream.Topic {
 	case TopicManifest:
-		plan, ok := coordinator.plans[request.Stream.Key]
+		plan, ok := coordinator.plan(request.Stream.Key)
 		if !ok {
 			return syncstream.Packet{}, ErrManifestMissing
 		}
 		return coordinator.projector.ManifestPacket(request.Observer, request.Stream.Key, plan)
 	case TopicState:
-		snapshot := coordinator.visibility.FilterStateSnapshot(request.Observer, coordinator.runtime.StateSnapshot())
+		snapshot, err := coordinator.visibility.FilterStateSnapshot(request.Observer, coordinator.runtime.StateSnapshot())
+		if err != nil {
+			coordinator.counters.visibilityFailures.Add(1)
+			return syncstream.Packet{}, err
+		}
 		return coordinator.projector.StateSnapshotPacket(request.Observer, request.Stream.Key, snapshot)
 	case TopicPresentation:
-		return coordinator.projector.PresentationResetPacket(request.Observer, request.Stream.Key, coordinator.runtime.StateSnapshot())
+		return coordinator.projector.PresentationResetPacket(request.Observer, request.Stream.Key, coordinator.runtime.PresentationSnapshot())
 	default:
 		return syncstream.Packet{}, fmt.Errorf("%w: %s", ErrTopicUnsupported, request.Stream.Topic)
 	}
 }
 
-func (coordinator *Coordinator) appendAndPublish(packet syncstream.Packet) error {
-	packet, err := coordinator.history.Append(packet)
-	if err != nil {
+func (coordinator *Coordinator) publishDue(observer syncstream.Observer, stream syncstream.Stream) error {
+	before := coordinator.outbox.Metrics()
+	err := coordinator.outbox.PublishDue(coordinator.publisher, time.Now(), &observer, &stream)
+	coordinator.capturePublishMetrics(before, coordinator.outbox.Metrics())
+	return err
+}
+func (coordinator *Coordinator) publishNow(observer syncstream.Observer, stream syncstream.Stream) error {
+	before := coordinator.outbox.Metrics()
+	err := coordinator.outbox.PublishNow(coordinator.publisher, time.Now(), &observer, &stream)
+	coordinator.capturePublishMetrics(before, coordinator.outbox.Metrics())
+	return err
+}
+func (coordinator *Coordinator) publishObserver(observer syncstream.Observer) error {
+	before := coordinator.outbox.Metrics()
+	err := coordinator.outbox.PublishDue(coordinator.publisher, time.Now(), &observer, nil)
+	coordinator.capturePublishMetrics(before, coordinator.outbox.Metrics())
+	return err
+}
+func (coordinator *Coordinator) RetryPending(now time.Time) error {
+	if err := coordinator.outbox.Reconcile(coordinator.history.Export()); err != nil {
 		return err
 	}
-	return coordinator.publish(packet)
+	before := coordinator.outbox.Metrics()
+	err := coordinator.outbox.PublishDue(coordinator.publisher, now, nil, nil)
+	coordinator.capturePublishMetrics(before, coordinator.outbox.Metrics())
+	return err
+}
+func (coordinator *Coordinator) capturePublishMetrics(before, after OutboxMetrics) {
+	coordinator.counters.published.Add(after.PublishSuccesses - before.PublishSuccesses)
+	coordinator.counters.publishFailures.Add(after.PublishFailures - before.PublishFailures)
 }
 
-func (coordinator *Coordinator) publish(packet syncstream.Packet) error {
-	if err := coordinator.publisher.Publish(packet.Clone()); err != nil {
-		coordinator.metrics.PublishFailures++
+func (coordinator *Coordinator) CloseObserver(observer syncstream.Observer) error {
+	if _, err := coordinator.history.DeleteObserver(observer); err != nil {
 		return err
 	}
-	coordinator.metrics.Published++
+	if err := coordinator.outbox.DiscardObserver(observer); err != nil {
+		return err
+	}
+	coordinator.mutex.Lock()
+	for key := range coordinator.cursors {
+		if key.observer == observer {
+			delete(coordinator.cursors, key)
+		}
+	}
+	coordinator.mutex.Unlock()
 	return nil
 }
 
 func (coordinator *Coordinator) Metrics() CoordinatorMetrics {
-	coordinator.mutex.Lock()
-	defer coordinator.mutex.Unlock()
-	return coordinator.metrics
+	return CoordinatorMetrics{Published: coordinator.counters.published.Load(), PublishFailures: coordinator.counters.publishFailures.Load(), Filtered: coordinator.counters.filtered.Load(), VisibilityFailures: coordinator.counters.visibilityFailures.Load(), SnapshotRecoveries: coordinator.counters.snapshotRecoveries.Load()}
 }

@@ -36,6 +36,8 @@ type RuntimeOptions struct {
 	PresentationLimit int
 	// StateEventLimit bounds authoritative change events retained for sync.
 	StateEventLimit int
+	// StateMutationLimit bounds canonical, client-applicable state mutations.
+	StateMutationLimit int
 }
 
 type CastInput struct {
@@ -190,6 +192,11 @@ type Runtime struct {
 	stateEvents             []StateEvent
 	stateEventSequence      uint64
 	stateEventDropped       uint64
+	stateMutations          []StateMutation
+	stateMutationSequence   uint64
+	stateMutationDropped    uint64
+	stateMutationBaseline   RuntimeStateSnapshot
+	stateMutationReady      bool
 }
 
 func NewRuntime(host Host, options RuntimeOptions) *Runtime {
@@ -217,6 +224,9 @@ func NewRuntime(host Host, options RuntimeOptions) *Runtime {
 	if options.StateEventLimit <= 0 {
 		options.StateEventLimit = 2048
 	}
+	if options.StateMutationLimit <= 0 {
+		options.StateMutationLimit = 2048
+	}
 	runtime := &Runtime{
 		host: host, options: options,
 		casts: make(map[CastID]*castInstance), scheduler: newScheduler(),
@@ -233,6 +243,8 @@ func NewRuntime(host Host, options RuntimeOptions) *Runtime {
 			}
 		}
 	}
+	runtime.stateMutationBaseline = runtime.stateSnapshotLocked()
+	runtime.stateMutationReady = true
 	return runtime
 }
 
