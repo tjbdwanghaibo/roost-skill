@@ -2,3 +2,5 @@
 /_go-cache/
 *.test
 *.out
+.idea/*
+.idea
