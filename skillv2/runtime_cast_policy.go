@@ -14,6 +14,7 @@ func (runtime *Runtime) beginPolicyWait(cast *castInstance) error {
 	cast.status = CastSuspended
 	key := skillStateKey{Caster: cast.caster, Skill: cast.program.id}
 	runtime.activePolicies[key] = cast.id
+	runtime.touchActivePolicyLocked(key)
 	switch cast.program.cast.mode {
 	case castModeCharge:
 		reason := "cancelled"
@@ -78,6 +79,7 @@ func (runtime *Runtime) executeAutoRelease(cast *castInstance, reason string) er
 		cast.status = CastFinished
 		runtime.markAbilityCastFinished(cast)
 		delete(runtime.activePolicies, skillStateKey{Caster: cast.caster, Skill: cast.program.id})
+		runtime.touchActivePolicyLocked(skillStateKey{Caster: cast.caster, Skill: cast.program.id})
 		runtime.emitCastLifecycleEvent(cast, "cast_cancelled")
 		return nil
 	}

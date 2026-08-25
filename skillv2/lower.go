@@ -39,6 +39,7 @@ func lowerProgram(artifacts *compileArtifacts) *Program {
 		activationKind:            artifacts.ir.activation.kind,
 		cooldownScope:             artifacts.ir.activation.cooldownScope,
 		cooldownTicks:             artifacts.ir.cooldownTicks,
+		globalCooldownTicks:       artifacts.ir.globalCooldownTicks,
 		limits:                    artifacts.limits,
 	}
 	context := loweringContext{artifacts: artifacts, program: program, memory: make(map[string]MemoryIndex), input: make(map[string]uint16)}
@@ -205,10 +206,18 @@ func (c *loweringContext) lowerCastAndCosts() {
 	window := c.artifacts.ir.activation.castWindow
 	c.program.cast = castWindowProgram{
 		windupTicks: window.windupTicks, commitTick: window.commitTick, recoveryTicks: window.recoveryTicks,
-		movement: window.movement, turning: window.turning, refundBeforeCommit: window.refundBeforeCommit,
+		hasWindupExpression: window.hasWindupExpression, windupTicksMin: window.windupTicksMin, windupTicksMax: window.windupTicksMax,
+		hasRecoveryExpression: window.hasRecoveryExpression, recoveryTicksMin: window.recoveryTicksMin, recoveryTicksMax: window.recoveryTicksMax,
+		movement: window.movement, turning: window.turning, refundBeforeCommit: window.refundBeforeCommit, concurrent: window.concurrent,
 		mode: policy.mode, pulseIntervalTicks: policy.pulseIntervalTicks, maxDurationTicks: policy.maxDurationTicks,
 		maxChargeTicks: policy.maxChargeTicks, minChargeBP: policy.minChargeBP, autoRelease: policy.autoRelease,
 		maxStock: policy.maxStock, rechargeTicks: policy.rechargeTicks, initialStock: policy.initialStock,
+	}
+	if window.hasWindupExpression {
+		c.program.cast.windupExpression = c.lowerValue(window.windupExpression, nil)
+	}
+	if window.hasRecoveryExpression {
+		c.program.cast.recoveryExpression = c.lowerValue(window.recoveryExpression, nil)
 	}
 	for _, key := range window.interruptTags {
 		if handle, ok := c.artifacts.authority.tags[key]; ok {

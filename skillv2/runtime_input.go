@@ -315,32 +315,44 @@ func resolveInputPosition(host Host, caster EntityID, position Position, policy 
 
 func zeroDirection(direction Direction) bool { return direction.X == 0 && direction.Y == 0 }
 
-func roundedDistance(left, right Position) *big.Int {
-	dx := new(big.Int).Sub(big.NewInt(right.X), big.NewInt(left.X))
-	dy := new(big.Int).Sub(big.NewInt(right.Y), big.NewInt(left.Y))
-	squared := new(big.Int).Add(new(big.Int).Mul(dx, dx), new(big.Int).Mul(dy, dy))
-	root := new(big.Int).Sqrt(squared)
-	remainder := new(big.Int).Sub(squared, new(big.Int).Mul(new(big.Int).Set(root), root))
-	if remainder.Cmp(new(big.Int).Add(root, big.NewInt(1))) >= 0 {
-		root.Add(root, big.NewInt(1))
-	}
-	return root
-}
-
-func distanceExceeds(left, right Position, maximum int64) bool {
-	return roundedDistance(left, right).Cmp(big.NewInt(maximum)) > 0
-}
-
-func integerDistance(left, right Position) int64 {
-	root := roundedDistance(left, right)
-	if !root.IsInt64() {
-		return int64(^uint64(0) >> 1)
-	}
-	return root.Int64()
-}
-
 func clampPosition(origin, requested Position, maximum int64) Position {
-	length := roundedDistance(origin, requested)
+	length, saturated := integerDistanceSaturated(origin, requested)
+	if !saturated && (length == 0 || length <= maximum) {
+		return requested
+	}
+	if saturated ||
+		absDeltaUint64(requested.X, origin.X) > uint64(maxInt64Value) ||
+		absDeltaUint64(requested.Y, origin.Y) > uint64(maxInt64Value) {
+		// Deltas beyond int64 need the exact arbitrary-precision path; this
+		// domain is unreachable for real world coordinates.
+		return clampPositionBig(origin, requested, maximum)
+	}
+	dx := saturatingInt64Sub(requested.X, origin.X)
+	dy := saturatingInt64Sub(requested.Y, origin.Y)
+	result := Position{
+		X: saturatingInt64Add(origin.X, mulDivRounded(dx, maximum, length)),
+		Y: saturatingInt64Add(origin.Y, mulDivRounded(dy, maximum, length)),
+	}
+	for distanceExceeds(origin, result, maximum) {
+		result = stepPositionToward(origin, result)
+	}
+	return result
+}
+
+// clampPositionBig is the arbitrary-precision clamp kept for deltas beyond
+// int64, preserving the historical exact behavior at extreme magnitudes.
+func clampPositionBig(origin, requested Position, maximum int64) Position {
+	length := new(big.Int)
+	{
+		dx := new(big.Int).Sub(big.NewInt(requested.X), big.NewInt(origin.X))
+		dy := new(big.Int).Sub(big.NewInt(requested.Y), big.NewInt(origin.Y))
+		squared := new(big.Int).Add(new(big.Int).Mul(dx, dx), new(big.Int).Mul(dy, dy))
+		length.Sqrt(squared)
+		remainder := new(big.Int).Sub(squared, new(big.Int).Mul(new(big.Int).Set(length), length))
+		if remainder.Cmp(new(big.Int).Add(length, big.NewInt(1))) >= 0 {
+			length.Add(length, big.NewInt(1))
+		}
+	}
 	if length.Sign() == 0 || length.Cmp(big.NewInt(maximum)) <= 0 {
 		return requested
 	}
@@ -356,25 +368,6 @@ func clampPosition(origin, requested Position, maximum int64) Position {
 		result = stepPositionToward(origin, result)
 	}
 	return result
-}
-
-func stepPositionToward(origin, position Position) Position {
-	dx := new(big.Int).Sub(big.NewInt(position.X), big.NewInt(origin.X))
-	dy := new(big.Int).Sub(big.NewInt(position.Y), big.NewInt(origin.Y))
-	if new(big.Int).Abs(dx).Cmp(new(big.Int).Abs(dy)) >= 0 && dx.Sign() != 0 {
-		if dx.Sign() > 0 {
-			position.X--
-		} else {
-			position.X++
-		}
-		return position
-	}
-	if dy.Sign() > 0 {
-		position.Y--
-	} else if dy.Sign() < 0 {
-		position.Y++
-	}
-	return position
 }
 
 func scaleBigRatioRounded(value *big.Int, numerator int64, denominator *big.Int) *big.Int {
@@ -405,6 +398,25 @@ func bigIntToInt64Saturated(value *big.Int) int64 {
 	return int64(^uint64(0) >> 1)
 }
 
+func stepPositionToward(origin, position Position) Position {
+	dx := saturatingInt64Sub(position.X, origin.X)
+	dy := saturatingInt64Sub(position.Y, origin.Y)
+	if absoluteDifference(dx, 0) >= absoluteDifference(dy, 0) && dx != 0 {
+		if dx > 0 {
+			position.X--
+		} else {
+			position.X++
+		}
+		return position
+	}
+	if dy > 0 {
+		position.Y--
+	} else if dy < 0 {
+		position.Y++
+	}
+	return position
+}
+
 func normalizedDirection(start, end Position, length int64) Direction {
 	if length <= 0 {
 		return Direction{}
@@ -415,26 +427,9 @@ func normalizedDirection(start, end Position, length int64) Direction {
 	}
 }
 
+// scaleRatioRounded delegates to the allocation-free 128-bit implementation;
+// bit-exactness with the historical big.Int version is locked by
+// TestMulDivRoundedMatchesReference.
 func scaleRatioRounded(value, numerator, denominator int64) int64 {
-	if denominator == 0 {
-		return 0
-	}
-	product := new(big.Int).Mul(big.NewInt(value), big.NewInt(numerator))
-	quotient, remainder := new(big.Int), new(big.Int)
-	quotient.QuoRem(product, big.NewInt(denominator), remainder)
-	twiceRemainder := new(big.Int).Lsh(new(big.Int).Abs(remainder), 1)
-	if twiceRemainder.Cmp(big.NewInt(absoluteDifference(denominator, 0))) >= 0 {
-		if product.Sign() < 0 {
-			quotient.Sub(quotient, big.NewInt(1))
-		} else {
-			quotient.Add(quotient, big.NewInt(1))
-		}
-	}
-	if quotient.IsInt64() {
-		return quotient.Int64()
-	}
-	if quotient.Sign() < 0 {
-		return -int64(^uint64(0)>>1) - 1
-	}
-	return int64(^uint64(0) >> 1)
+	return mulDivRounded(value, numerator, denominator)
 }

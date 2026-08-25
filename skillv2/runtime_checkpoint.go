@@ -993,6 +993,7 @@ func (runtime *Runtime) restoreCheckpointPayload(p runtimeCheckpointPayload, res
 	}
 	runtime.stateMutationBaseline = p.StateMutationBaseline
 	runtime.stateMutationReady = p.StateMutationReady
+	runtime.clearStateMutationWritePointsLocked()
 	runtime.stateMutationDirty = false
 	return nil
 }

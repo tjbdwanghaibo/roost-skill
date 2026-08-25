@@ -1,5 +1,29 @@
 package skillv2
 
+// globalCooldownProgramID is the reserved cooldown-map program id carrying a
+// caster's global cooldown. It is not a valid skill identifier, so it can
+// never collide with a real program, and it rides the ordinary cooldown
+// machinery: state sync, mutations and checkpoints all see it as a plain
+// cooldown entry.
+const globalCooldownProgramID = "$gcd"
+
+// casterWindowBusyLocked reports whether the caster currently owns a cast
+// that is inside its exclusive window (windup, commit, or recovery). It scans
+// the cast table instead of maintaining a counter: window stages change at
+// many sites, casts are bounded, and a scan cannot drift out of sync.
+func (runtime *Runtime) casterWindowBusyLocked(caster EntityID) bool {
+	for _, cast := range runtime.casts {
+		if cast.caster != caster || cast.status == CastFinished || cast.status == CastFailed {
+			continue
+		}
+		switch cast.windowStage {
+		case CastWindowPreparing, CastWindowCommitted, CastWindowRecovering:
+			return true
+		}
+	}
+	return false
+}
+
 func (runtime *Runtime) prepareCast(cast *castInstance) error {
 	key := cooldownKey{Caster: cast.cooldownOwner, Skill: cast.program.id}
 	if due := runtime.cooldowns[key]; due > runtime.currentTick {
@@ -30,8 +54,12 @@ func (runtime *Runtime) prepareCastWindow(cast *castInstance, event string) erro
 		}
 		cast.costsPaid = true
 	}
+	windupTicks, windupErr := runtime.castWindupTicks(cast)
+	if windupErr != nil {
+		return windupErr
+	}
 	commitDue := cast.windowStartTick + cast.program.cast.commitTick
-	executeDue := cast.windowStartTick + cast.program.cast.windupTicks
+	executeDue := cast.windowStartTick + windupTicks
 	if commitDue == runtime.currentTick {
 		if err := runtime.commitCast(cast); err != nil {
 			return err
@@ -72,6 +100,13 @@ func (runtime *Runtime) commitCast(cast *castInstance) error {
 	runtime.markAbilityCommitted(cast)
 	runtime.emitCastPresentation(cast)
 	cast.windowStage = CastWindowCommitted
+	if gcd := cast.program.globalCooldownTicks; gcd > 0 {
+		key := cooldownKey{Caster: cast.caster, Skill: globalCooldownProgramID}
+		if due := runtime.currentTick + gcd; due > runtime.cooldowns[key] {
+			runtime.cooldowns[key] = due
+			runtime.touchCooldownLocked(key)
+		}
+	}
 	if cast.program.cast.mode == castModeTap || cast.program.cast.mode == castModeAmmo || cast.program.cast.mode == castModeCharge {
 		runtime.startCooldown(cast)
 	}
@@ -85,6 +120,7 @@ func (runtime *Runtime) startCooldown(cast *castInstance) {
 	}
 	cast.cooldownStarted = true
 	runtime.cooldowns[cooldownKey{Caster: cast.cooldownOwner, Skill: cast.program.id}] = runtime.currentTick + cast.program.cooldownTicks
+	runtime.touchCooldownLocked(cooldownKey{Caster: cast.cooldownOwner, Skill: cast.program.id})
 	runtime.emitCastLifecycleEvent(cast, "cast_cooldown_started")
 }
 
@@ -120,11 +156,57 @@ func (runtime *Runtime) beginCastRecovery(cast *castInstance) error {
 		return nil
 	}
 	runtime.emitCastLifecycleEvent(cast, "cast_recovering")
-	if cast.program.cast.recoveryTicks == 0 {
+	recoveryTicks, recoveryErr := runtime.castRecoveryTicks(cast)
+	if recoveryErr != nil {
+		return recoveryErr
+	}
+	if recoveryTicks == 0 {
 		return runtime.completeCastRecovery(cast)
 	}
 	frame := runtime.retainLocalFrame(cast.locals)
-	return runtime.schedule(cast, runtime.currentTick+cast.program.cast.recoveryTicks, &castRecoveryTask{CastID: cast.id, PhaseToken: cast.phaseToken, Frame: frame})
+	return runtime.schedule(cast, runtime.currentTick+recoveryTicks, &castRecoveryTask{CastID: cast.id, PhaseToken: cast.phaseToken, Frame: frame})
+}
+
+// castWindupTicks resolves the cast window's windup duration: the literal
+// program value, or the windup expression sampled as the window is prepared.
+// Expression results are clamped into the compile-time [min, max] bounds, so
+// scheduled due ticks can never escape the declared worst case, and the
+// commit_tick <= min invariant keeps commit before execute.
+func (runtime *Runtime) castWindupTicks(cast *castInstance) (Tick, error) {
+	window := cast.program.cast
+	if !window.hasWindupExpression {
+		return window.windupTicks, nil
+	}
+	return runtime.evalWindowTicks(cast, window.windupExpression, window.windupTicksMin, window.windupTicksMax)
+}
+
+// castRecoveryTicks resolves the recovery duration, sampled as recovery
+// begins so the expression sees post-execution state.
+func (runtime *Runtime) castRecoveryTicks(cast *castInstance) (Tick, error) {
+	window := cast.program.cast
+	if !window.hasRecoveryExpression {
+		return window.recoveryTicks, nil
+	}
+	return runtime.evalWindowTicks(cast, window.recoveryExpression, window.recoveryTicksMin, window.recoveryTicksMax)
+}
+
+func (runtime *Runtime) evalWindowTicks(cast *castInstance, expression programValue, minimum, maximum Tick) (Tick, error) {
+	value, err := runtime.evalValue(cast, expression)
+	if err != nil {
+		return 0, err
+	}
+	ticks, ok := value.Int()
+	if !ok {
+		return 0, ErrRuntimeTypeMismatch
+	}
+	result := Tick(ticks)
+	if result < minimum {
+		result = minimum
+	}
+	if result > maximum {
+		result = maximum
+	}
+	return result, nil
 }
 
 func (runtime *Runtime) completeCastRecovery(cast *castInstance) error {
@@ -136,6 +218,7 @@ func (runtime *Runtime) completeCastRecovery(cast *castInstance) error {
 	runtime.markAbilityCastFinished(cast)
 	cast.policyActive = false
 	delete(runtime.activePolicies, skillStateKey{Caster: cast.caster, Skill: cast.program.id})
+	runtime.touchActivePolicyLocked(skillStateKey{Caster: cast.caster, Skill: cast.program.id})
 	runtime.emitCastLifecycleEvent(cast, "cast_complete")
 	return nil
 }
@@ -230,6 +313,7 @@ func (runtime *Runtime) releaseCast(cast *castInstance, reason string) error {
 			cast.releaseReason = "cancelled"
 			cast.policyActive = false
 			delete(runtime.activePolicies, skillStateKey{Caster: cast.caster, Skill: cast.program.id})
+			runtime.touchActivePolicyLocked(skillStateKey{Caster: cast.caster, Skill: cast.program.id})
 			runtime.cancelPhaseTasks(cast, cast.phaseToken)
 			cast.windowStage = CastWindowCancelled
 			cast.status = CastFinished
@@ -249,6 +333,7 @@ func (runtime *Runtime) releaseCast(cast *castInstance, reason string) error {
 	cast.releaseReason = reason
 	cast.policyActive = false
 	delete(runtime.activePolicies, skillStateKey{Caster: cast.caster, Skill: cast.program.id})
+	runtime.touchActivePolicyLocked(skillStateKey{Caster: cast.caster, Skill: cast.program.id})
 	runtime.cancelPhaseTasks(cast, cast.phaseToken)
 	cast.phaseToken++
 	runtime.startCooldown(cast)
@@ -285,6 +370,9 @@ func (runtime *Runtime) castChargeBP(cast *castInstance) int64 {
 
 func (runtime *Runtime) ammoState(cast *castInstance) *skillState {
 	key := skillStateKey{Caster: cast.caster, Skill: cast.program.id}
+	// Recorded unconditionally: callers mutate the returned state in place,
+	// and a spurious record on a read-only call diffs to nothing.
+	runtime.touchSkillResourceLocked(key)
 	state := runtime.skillStates[key]
 	if state == nil {
 		state = &skillState{stock: cast.program.cast.initialStock, maxStock: cast.program.cast.maxStock, rechargeTicks: cast.program.cast.rechargeTicks}
@@ -297,6 +385,7 @@ func (runtime *Runtime) ensureAmmoRecharge(cast *castInstance, state *skillState
 	if state.rechargeScheduled || state.stock >= state.maxStock {
 		return
 	}
+	runtime.touchSkillResourceLocked(skillStateKey{Caster: cast.caster, Skill: cast.program.id})
 	state.rechargeScheduled = true
 	state.rechargeGeneration++
 	state.rechargeDue = runtime.currentTick + state.rechargeTicks
@@ -308,6 +397,7 @@ func (runtime *Runtime) executeAmmoRecharge(task *ammoRechargeTask) error {
 	if state == nil || !state.rechargeScheduled || task.Generation != state.rechargeGeneration || runtime.currentTick != state.rechargeDue {
 		return nil
 	}
+	runtime.touchSkillResourceLocked(skillStateKey{Caster: task.Caster, Skill: task.Skill})
 	if state.stock < state.maxStock {
 		state.stock++
 	}

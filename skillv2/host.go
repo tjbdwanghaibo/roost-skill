@@ -1,5 +1,22 @@
 package skillv2
 
+// Host is the world-authority surface the Runtime drives. Implementations
+// must honor the following concurrency contract:
+//
+//   - Every Host method is invoked while the Runtime holds its internal lock:
+//     calls are strictly serialized, and implementations never need their own
+//     synchronization against concurrent Runtime callbacks.
+//   - Host methods must not re-enter the Runtime (Start, Advance, Input,
+//     Cancel, StateDeltas, ...). The Runtime lock is not reentrant; a
+//     re-entrant call deadlocks. World reactions to skill effects belong in
+//     Events, which the Runtime polls at deterministic points.
+//   - Host methods must not block on channels, locks held by other
+//     goroutines that call the Runtime, or I/O with unbounded latency. A
+//     blocked Host call stalls every caster on this Runtime.
+//   - Results must be deterministic functions of world state at the request
+//     revision. Wall-clock time, map iteration order, and goroutine timing
+//     must never influence a result; replay and checkpoint recovery re-issue
+//     the same calls and must observe identical answers.
 type Host interface {
 	AuthorityProvider
 	StateStore

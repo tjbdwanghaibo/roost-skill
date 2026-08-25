@@ -1,7 +1,88 @@
 package skillv2
 
+import "github.com/tjbdwanghaibo/cube-skill/v2/combat"
+
+// MemoryHost delegates all combat arithmetic to the combat package so the
+// reference host and production hosts run the same twelve-stage pipeline.
+// This file keeps only host bookkeeping: entity lookup, status-backed hooks,
+// event emission, and revision commits.
+
+// memoryCombatHooks adapts MemoryHost's status storage to combat.Hooks. Each
+// Peek remembers which entity owns the peeked hook, because ConsumeHook is
+// keyed by hook name only and always follows the matching Peek.
+type memoryCombatHooks struct {
+	host       *MemoryHost
+	source     EntityID
+	target     EntityID
+	peekedFrom map[string]EntityID
+}
+
+func (hooks *memoryCombatHooks) peek(entity EntityID, names ...string) (string, bool) {
+	_, hook, ok := hooks.host.firstCombatHookStatusLocked(entity, names...)
+	if ok {
+		if hooks.peekedFrom == nil {
+			hooks.peekedFrom = map[string]EntityID{}
+		}
+		hooks.peekedFrom[hook] = entity
+	}
+	return hook, ok
+}
+
+func (hooks *memoryCombatHooks) PeekSpellShield() (string, bool) {
+	return hooks.peek(hooks.target, "spell_shield")
+}
+
+func (hooks *memoryCombatHooks) PeekCriticalOverride() (string, bool) {
+	return hooks.peek(hooks.source, "critical_override")
+}
+
+func (hooks *memoryCombatHooks) PeekDeathPrevention() (string, bool) {
+	return hooks.peek(hooks.target, "death_prevention", "execute_immunity")
+}
+
+func (hooks *memoryCombatHooks) ConsumeHook(hook string) {
+	hooks.host.consumeCombatHookStatusLocked(hooks.peekedFrom[hook], hook)
+}
+
+func (hooks *memoryCombatHooks) OnShieldAbsorbed(absorbed int64) {
+	remaining := absorbed
+	statusRemove := map[int]bool{}
+	for index := range hooks.host.statuses {
+		instance := &hooks.host.statuses[index]
+		policy, _ := hooks.host.statusPolicy(instance.status)
+		if instance.target != hooks.target || policy.Category != "shield" || remaining <= 0 {
+			continue
+		}
+		drained := minInt64(instance.shield, remaining)
+		instance.shield -= drained
+		remaining -= drained
+		if instance.shield == 0 {
+			statusRemove[index] = true
+		}
+	}
+	if len(statusRemove) > 0 {
+		hooks.host.filterStatusesLocked(statusRemove)
+	}
+}
+
+func combatantFromMemoryEntity(entity MemoryEntity, element ElementHandle) combat.Combatant {
+	combatant := combat.Combatant{
+		Alive: entity.Alive, Health: entity.Health, MaxHealth: entity.MaxHealth, Shield: entity.Shield,
+		Armor: entity.Armor, MagicResistance: entity.MagicResistance, Penetration: entity.Penetration,
+		DamageDealtBP: entity.DamageDealtBP, DamageTakenBP: entity.DamageTakenBP,
+		CriticalMultiplierBP: entity.CriticalMultiplierBP, VampBP: entity.VampBP,
+		DamageCap: entity.DamageCap, MinimumDamage: entity.MinimumDamage,
+		Dodge: entity.Dodge, Parry: entity.Parry, Block: entity.Block,
+		DamageImmune: entity.DamageImmune, SpellShield: entity.SpellShield, ForceCritical: entity.ForceCritical,
+	}
+	if multiplier := entity.ElementMultipliers[element]; multiplier != 0 {
+		combatant.ElementMultipliersBP = map[combat.Element]int64{combat.Element(element): multiplier}
+	}
+	return combatant
+}
+
 func (host *MemoryHost) applyDamageLocked(command DamageCommand) (EffectResult, error) {
-	if len(fixedCombatPipeline) != 12 {
+	if len(fixedCombatPipeline) != len(combat.PipelineStages) {
 		panic("skillv2: combat pipeline invariant violated")
 	}
 	if policy := host.gameplay.Combat.FormulaPolicy; policy != "" && policy != "twelve_stage_v1" {
@@ -25,128 +106,44 @@ func (host *MemoryHost) applyDamageLocked(command DamageCommand) (EffectResult, 
 			return EffectResult{Commit: CommitReceipt{Revision: host.revision}, Payload: DamageEffectResult{ResultOutcome: failedResultOutcome(ExpectedFailureInvalidTarget)}}, nil
 		}
 	}
-	result := DamageResult{Attempted: maxInt64(command.Amount, 0)}
-	amount := result.Attempted
+
+	sourceCombatant := combatantFromMemoryEntity(source, command.Element)
+	targetCombatant := combatantFromMemoryEntity(target, command.Element)
+	hooks := &memoryCombatHooks{host: host, source: command.Source, target: command.Target}
+	input := combat.DamageInput{
+		Amount: command.Amount, Type: combat.DamageType(command.DamageType), Element: combat.Element(command.Element),
+		CanCritical: command.CanCritical,
+		SpellTagged: host.spellTag != 0 && containsGameplayTag(command.Tags, host.spellTag),
+	}
+	var sourcePointer *combat.Combatant
+	if command.Source != 0 {
+		sourcePointer = &sourceCombatant
+	}
+	outcome, _ := combat.ResolveDamage(sourcePointer, &targetCombatant, input, hooks)
+
+	result := DamageResult{
+		Attempted: outcome.Attempted, Mitigated: outcome.Mitigated, Absorbed: outcome.Absorbed,
+		HealthDamage: outcome.HealthDamage,
+		Dodged:       outcome.Dodged, Parried: outcome.Parried, Blocked: outcome.Blocked,
+		Critical: outcome.Critical, Immune: outcome.Immune, Killed: outcome.Killed,
+		CombatHooks: outcome.CombatHooks,
+	}
 	context := command.Event
 	context.Source, context.Owner, context.Target = command.Source, command.Owner, command.Target
 	context.EffectIndex, context.DamageType, context.Element = command.Meta.EffectIndex, command.DamageType, command.Element
-	context.Result = combatResultHit
+	context.Result = outcome.Result
 
-	if host.spellTag != 0 && containsGameplayTag(command.Tags, host.spellTag) {
-		_, hook, ok := host.firstCombatHookStatusLocked(command.Target, "spell_shield")
-		if ok {
-			result.Immune = true
-			result.CombatHooks = append(result.CombatHooks, hook)
-			context.Result = hook
-			host.consumeCombatHookStatusLocked(command.Target, hook)
-			return host.commitDamageLocked(command, result, context), nil
-		}
-	}
-	if target.DamageImmune || target.SpellShield {
-		result.Immune = true
-		context.Result = combatResultImmune
-		if target.SpellShield {
-			target.SpellShield = false
-			host.entities[command.Target] = target
-		}
-		return host.commitDamageLocked(command, result, context), nil
-	}
-	if target.Dodge {
-		result.Dodged, amount, context.Result = true, 0, combatResultDodged
-	} else if target.Parry {
-		result.Parried, amount, context.Result = true, 0, combatResultParried
-	} else if target.Block {
-		result.Blocked, amount, context.Result = true, amount/2, combatResultBlocked
-	}
-
-	resistance := int64(0)
-	switch command.DamageType {
-	case 1:
-		resistance = target.Armor
-	case 2:
-		resistance = target.MagicResistance
-	}
-	resistance = maxInt64(0, saturatingInt64Sub(resistance, source.Penetration))
-	if resistance > 0 {
-		denominator := saturatingInt64Add(10000, saturatingInt64Mul(resistance, 100))
-		amount = saturatingInt64Mul(amount, 10000) / denominator
-	}
-	result.Mitigated = amount
-
-	elementBP := target.ElementMultipliers[command.Element]
-	if elementBP == 0 {
-		elementBP = 10000
-	}
-	amount = scaleBasisPoints(amount, elementBP)
-	dealtBP, takenBP := source.DamageDealtBP, target.DamageTakenBP
-	if dealtBP == 0 {
-		dealtBP = 10000
-	}
-	if takenBP == 0 {
-		takenBP = 10000
-	}
-	amount = scaleBasisPoints(scaleBasisPoints(amount, dealtBP), takenBP)
-	_, criticalHook, criticalOverride := host.firstCombatHookStatusLocked(command.Source, "critical_override")
-	if command.CanCritical && (source.ForceCritical || criticalOverride) {
-		criticalBP := source.CriticalMultiplierBP
-		if criticalBP == 0 {
-			criticalBP = 15000
-		}
-		amount = scaleBasisPoints(amount, criticalBP)
-		result.Critical = true
-		if criticalOverride {
-			result.CombatHooks = append(result.CombatHooks, criticalHook)
-			host.consumeCombatHookStatusLocked(command.Source, criticalHook)
-		}
-	}
-	if target.DamageCap > 0 && amount > target.DamageCap {
-		amount = target.DamageCap
-	}
-	if target.MinimumDamage > 0 && amount > 0 && amount < target.MinimumDamage {
-		amount = target.MinimumDamage
-	}
-	result.Absorbed = minInt64(target.Shield, amount)
-	target.Shield -= result.Absorbed
-	amount -= result.Absorbed
-	remainingAbsorb := result.Absorbed
-	statusRemove := map[int]bool{}
-	for index := range host.statuses {
-		instance := &host.statuses[index]
-		policy, _ := host.statusPolicy(instance.status)
-		if instance.target != command.Target || policy.Category != "shield" || remainingAbsorb <= 0 {
-			continue
-		}
-		absorbed := minInt64(instance.shield, remainingAbsorb)
-		instance.shield -= absorbed
-		remainingAbsorb -= absorbed
-		if instance.shield == 0 {
-			statusRemove[index] = true
-		}
-	}
-	if len(statusRemove) > 0 {
-		host.filterStatusesLocked(statusRemove)
-	}
-	if amount >= target.Health && target.Health > 0 {
-		if _, hook, ok := host.firstCombatHookStatusLocked(command.Target, "death_prevention", "execute_immunity"); ok {
-			amount = maxInt64(0, target.Health-1)
-			result.CombatHooks = append(result.CombatHooks, hook)
-			context.Result = hook
-			host.consumeCombatHookStatusLocked(command.Target, hook)
-		}
-	}
-	result.HealthDamage = minInt64(target.Health, amount)
-	target.Health -= result.HealthDamage
-	if target.Health == 0 && result.HealthDamage > 0 {
-		target.Alive = false
-		result.Killed = true
-		context.Result = combatResultKilled
-	}
-	if command.Source != 0 && source.VampBP > 0 && result.HealthDamage > 0 {
-		heal := scaleBasisPoints(result.HealthDamage, source.VampBP)
-		source.Health = minInt64(source.MaxHealth, saturatingInt64Add(source.Health, heal))
+	// Write source before target so a self-vamp keeps the historical
+	// resolution order (the target write wins on overlap).
+	if command.Source != 0 && outcome.VampHeal > 0 {
+		source.Health = sourceCombatant.Health
 		host.entities[command.Source] = source
 	}
-	host.entities[command.Target] = target
+	if !outcome.Immune || target.SpellShield {
+		target.Health, target.Shield = targetCombatant.Health, targetCombatant.Shield
+		target.Alive, target.SpellShield = targetCombatant.Alive, targetCombatant.SpellShield
+		host.entities[command.Target] = target
+	}
 	return host.commitDamageLocked(command, result, context), nil
 }
 
@@ -234,15 +231,15 @@ func (host *MemoryHost) applyHealLocked(command HealCommand) (EffectResult, erro
 	if !ok || !target.Alive {
 		return EffectResult{Commit: CommitReceipt{Revision: host.revision}, Payload: HealEffectResult{ResultOutcome: failedResultOutcome(ExpectedFailureInvalidTarget)}}, nil
 	}
-	attempted := maxInt64(command.Amount, 0)
-	effective := minInt64(attempted, maxInt64(0, target.MaxHealth-target.Health))
-	target.Health += effective
+	targetCombatant := combatantFromMemoryEntity(target, 0)
+	outcome, _ := combat.ResolveHeal(&targetCombatant, command.Amount)
+	target.Health = targetCombatant.Health
 	host.entities[command.Target] = target
 	context := command.Event
 	context.Source, context.Target, context.Result = command.Source, command.Target, "healed"
 	host.revision++
 	host.appendContextEventLocked("heal_resolved", command.Target, 0, context)
-	return EffectResult{Commit: CommitReceipt{Revision: host.revision, Changed: true}, Payload: HealEffectResult{ResultOutcome: successfulResultOutcome(), Result: HealResult{Attempted: attempted, Effective: effective}}}, nil
+	return EffectResult{Commit: CommitReceipt{Revision: host.revision, Changed: true}, Payload: HealEffectResult{ResultOutcome: successfulResultOutcome(), Result: HealResult{Attempted: outcome.Attempted, Effective: outcome.Effective}}}, nil
 }
 
 func (host *MemoryHost) applyShieldLocked(command ShieldCommand) (EffectResult, error) {
@@ -250,8 +247,9 @@ func (host *MemoryHost) applyShieldLocked(command ShieldCommand) (EffectResult, 
 	if !ok || !target.Alive {
 		return EffectResult{Commit: CommitReceipt{Revision: host.revision}, Payload: ShieldEffectResult{ResultOutcome: failedResultOutcome(ExpectedFailureInvalidTarget)}}, nil
 	}
-	added := maxInt64(command.Amount, 0)
-	target.Shield = saturatingInt64Add(target.Shield, added)
+	targetCombatant := combatantFromMemoryEntity(target, 0)
+	added, _ := combat.AddShield(&targetCombatant, command.Amount)
+	target.Shield = targetCombatant.Shield
 	shieldStatus := StatusHandle(0)
 	for _, entry := range host.gameplay.Statuses.Entries {
 		if entry.Category == "shield" {
@@ -281,10 +279,6 @@ func (host *MemoryHost) applyShieldLocked(command ShieldCommand) (EffectResult, 
 	return EffectResult{Commit: CommitReceipt{Revision: host.revision, Changed: true}, Payload: ShieldEffectResult{ResultOutcome: successfulResultOutcome(), Result: ShieldResult{Added: added}}}, nil
 }
 
-func scaleBasisPoints(value, basisPoints int64) int64 {
-	return saturatingInt64Mul(value, basisPoints) / 10000
-}
-
 func minInt64(left, right int64) int64 {
 	if left < right {
 		return left
@@ -297,4 +291,8 @@ func maxInt64(left, right int64) int64 {
 		return left
 	}
 	return right
+}
+
+func scaleBasisPoints(value, basisPoints int64) int64 {
+	return combat.ScaleBasisPoints(value, basisPoints)
 }

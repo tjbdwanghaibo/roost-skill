@@ -12,6 +12,10 @@ type ActivationDefinition interface {
 type ActiveActivationDefinition struct {
 	Policy     CastPolicyDefinition
 	CastWindow *CastWindowDefinition
+	// Concurrent opts this skill out of caster cast-window exclusivity: by
+	// default a root activation is rejected with ErrCasterBusy while the
+	// caster has another cast in its windup, commit, or recovery window.
+	Concurrent bool
 }
 
 func (ActiveActivationDefinition) activationDefinition() {}
@@ -79,6 +83,48 @@ type HoldPolicyDefinition struct {
 
 func (HoldPolicyDefinition) castPolicyDefinition() {}
 
+func decodeCastWindow(data []byte) (*CastWindowDefinition, error) {
+	var raw struct {
+		WindupTicks             Tick            `json:"windup_ticks"`
+		WindupTicksExpression   json.RawMessage `json:"windup_ticks_expression"`
+		WindupTicksMin          Tick            `json:"windup_ticks_min"`
+		WindupTicksMax          Tick            `json:"windup_ticks_max"`
+		CommitTick              Tick            `json:"commit_tick"`
+		RecoveryTicks           Tick            `json:"recovery_ticks"`
+		RecoveryTicksExpression json.RawMessage `json:"recovery_ticks_expression"`
+		RecoveryTicksMin        Tick            `json:"recovery_ticks_min"`
+		RecoveryTicksMax        Tick            `json:"recovery_ticks_max"`
+		Movement                string          `json:"movement"`
+		Turning                 string          `json:"turning"`
+		InterruptTags           []string        `json:"interrupt_tags"`
+		RefundBeforeCommit      bool            `json:"refund_before_commit"`
+	}
+	if err := decodeStrictSingle(data, &raw); err != nil {
+		return nil, err
+	}
+	result := &CastWindowDefinition{
+		WindupTicks: raw.WindupTicks, WindupTicksMin: raw.WindupTicksMin, WindupTicksMax: raw.WindupTicksMax,
+		CommitTick: raw.CommitTick, RecoveryTicks: raw.RecoveryTicks,
+		RecoveryTicksMin: raw.RecoveryTicksMin, RecoveryTicksMax: raw.RecoveryTicksMax,
+		Movement: raw.Movement, Turning: raw.Turning, InterruptTags: raw.InterruptTags, RefundBeforeCommit: raw.RefundBeforeCommit,
+	}
+	if len(raw.WindupTicksExpression) != 0 {
+		value, err := decodeValue(raw.WindupTicksExpression)
+		if err != nil {
+			return nil, fmt.Errorf("windup_ticks_expression: %w", err)
+		}
+		result.WindupTicksExpression = value
+	}
+	if len(raw.RecoveryTicksExpression) != 0 {
+		value, err := decodeValue(raw.RecoveryTicksExpression)
+		if err != nil {
+			return nil, fmt.Errorf("recovery_ticks_expression: %w", err)
+		}
+		result.RecoveryTicksExpression = value
+	}
+	return result, nil
+}
+
 func decodeActivation(data []byte) (ActivationDefinition, error) {
 	var header struct {
 		Type string `json:"type"`
@@ -91,6 +137,7 @@ func decodeActivation(data []byte) (ActivationDefinition, error) {
 			Type       string          `json:"type"`
 			Policy     json.RawMessage `json:"policy"`
 			CastWindow json.RawMessage `json:"cast_window"`
+			Concurrent bool            `json:"concurrent"`
 		}
 		if err := decodeStrictSingle(data, &raw); err != nil {
 			return nil, err
@@ -101,13 +148,13 @@ func decodeActivation(data []byte) (ActivationDefinition, error) {
 		}
 		var castWindow *CastWindowDefinition
 		if len(raw.CastWindow) != 0 {
-			var value CastWindowDefinition
-			if err := decodeStrictSingle(raw.CastWindow, &value); err != nil {
+			value, err := decodeCastWindow(raw.CastWindow)
+			if err != nil {
 				return nil, fmt.Errorf("activation.cast_window: %w", err)
 			}
-			castWindow = &value
+			castWindow = value
 		}
-		return ActiveActivationDefinition{Policy: policy, CastWindow: castWindow}, nil
+		return ActiveActivationDefinition{Policy: policy, CastWindow: castWindow, Concurrent: raw.Concurrent}, nil
 	}
 	if isPassiveActivation(header.Type) {
 		var raw struct {

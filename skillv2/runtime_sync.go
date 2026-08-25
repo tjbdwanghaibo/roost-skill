@@ -205,7 +205,18 @@ func (runtime *Runtime) stateSnapshotLocked() RuntimeStateSnapshot {
 		revision = runtime.host.CurrentRevision()
 	}
 	snapshot := RuntimeStateSnapshot{Tick: runtime.currentTick, WorldRevision: revision, LatestStateEventSequence: runtime.stateEventSequence, LatestStateMutationSequence: runtime.stateMutationSequence, LatestPresentationSequence: runtime.presentationSequence,
-		Casts: make([]CastStateSnapshot, 0, len(runtime.casts)), Cooldowns: make([]CooldownStateSnapshot, 0, len(runtime.cooldowns)), SkillResources: make([]SkillResourceSnapshot, 0, len(runtime.skillStates)), Abilities: make([]AbilityStateSnapshot, 0, len(runtime.abilities)), Processes: make([]ProcessStateSnapshot, 0, len(runtime.processes)), ActivePolicies: make([]ActivePolicySnapshot, 0, len(runtime.activePolicies))}
+		Casts: runtime.castsSnapshotLocked(), Cooldowns: runtime.cooldownsSnapshotLocked(), SkillResources: runtime.skillResourcesSnapshotLocked(), Abilities: runtime.abilitiesSnapshotLocked(), Processes: runtime.processesSnapshotLocked(), ActivePolicies: runtime.activePoliciesSnapshotLocked()}
+	snapshot.PersistentStates = runtime.persistentStatesSnapshotLocked()
+	return snapshot
+}
+
+// Per-domain snapshot builders. These are the single source of truth for
+// snapshot entry construction: the full snapshot above and the incremental
+// mutation commit (runtime_mutation.go) both build entries here, so the
+// incremental baseline stays byte-identical with a full snapshot.
+
+func (runtime *Runtime) castsSnapshotLocked() []CastStateSnapshot {
+	result := make([]CastStateSnapshot, 0, len(runtime.casts))
 	castIDs := make([]int, 0, len(runtime.casts))
 	for id := range runtime.casts {
 		castIDs = append(castIDs, int(id))
@@ -213,48 +224,80 @@ func (runtime *Runtime) stateSnapshotLocked() RuntimeStateSnapshot {
 	sort.Ints(castIDs)
 	for _, rawID := range castIDs {
 		cast := runtime.casts[CastID(rawID)]
-		snapshot.Casts = append(snapshot.Casts, CastStateSnapshot{ID: cast.id, ProgramID: cast.program.id, GameplayDigest: cast.program.identity.gameplayDigest, Caster: cast.caster, PrimaryTarget: cast.primaryTarget, Status: cast.status, CurrentPhase: cast.currentPhase, VisibleRevision: cast.visibleRevision, Failure: cast.failure, WindowStage: cast.windowStage, Committed: cast.committed, StartTick: cast.startTick, ElapsedTicks: runtime.currentTick - cast.startTick, PulseIndex: cast.pulseIndex, ReleaseReason: cast.releaseReason, Stock: cast.stock, MaxStock: cast.maxStock})
+		result = append(result, CastStateSnapshot{ID: cast.id, ProgramID: cast.program.id, GameplayDigest: cast.program.identity.gameplayDigest, Caster: cast.caster, PrimaryTarget: cast.primaryTarget, Status: cast.status, CurrentPhase: cast.currentPhase, VisibleRevision: cast.visibleRevision, Failure: cast.failure, WindowStage: cast.windowStage, Committed: cast.committed, StartTick: cast.startTick, ElapsedTicks: runtime.currentTick - cast.startTick, PulseIndex: cast.pulseIndex, ReleaseReason: cast.releaseReason, Stock: cast.stock, MaxStock: cast.maxStock})
 	}
+	return result
+}
+
+func (runtime *Runtime) cooldownSnapshotLocked(key cooldownKey, due Tick) CooldownStateSnapshot {
+	remaining := due - runtime.currentTick
+	if remaining < 0 {
+		remaining = 0
+	}
+	return CooldownStateSnapshot{Caster: key.Caster, ProgramID: key.Skill, DueTick: due, Remaining: remaining}
+}
+
+func (runtime *Runtime) cooldownsSnapshotLocked() []CooldownStateSnapshot {
+	result := make([]CooldownStateSnapshot, 0, len(runtime.cooldowns))
 	for key, due := range runtime.cooldowns {
-		remaining := due - runtime.currentTick
-		if remaining < 0 {
-			remaining = 0
-		}
-		snapshot.Cooldowns = append(snapshot.Cooldowns, CooldownStateSnapshot{Caster: key.Caster, ProgramID: key.Skill, DueTick: due, Remaining: remaining})
+		result = append(result, runtime.cooldownSnapshotLocked(key, due))
 	}
-	sort.Slice(snapshot.Cooldowns, func(i, j int) bool {
-		if snapshot.Cooldowns[i].Caster != snapshot.Cooldowns[j].Caster {
-			return snapshot.Cooldowns[i].Caster < snapshot.Cooldowns[j].Caster
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Caster != result[j].Caster {
+			return result[i].Caster < result[j].Caster
 		}
-		return snapshot.Cooldowns[i].ProgramID < snapshot.Cooldowns[j].ProgramID
+		return result[i].ProgramID < result[j].ProgramID
 	})
+	return result
+}
+
+func skillResourceSnapshot(key skillStateKey, state *skillState) SkillResourceSnapshot {
+	return SkillResourceSnapshot{Caster: key.Caster, ProgramID: key.Skill, Stock: state.stock, MaxStock: state.maxStock, RechargeTicks: state.rechargeTicks, RechargeDue: state.rechargeDue, RechargeScheduled: state.rechargeScheduled, RechargeGeneration: state.rechargeGeneration}
+}
+
+func (runtime *Runtime) skillResourcesSnapshotLocked() []SkillResourceSnapshot {
+	result := make([]SkillResourceSnapshot, 0, len(runtime.skillStates))
 	for key, state := range runtime.skillStates {
-		snapshot.SkillResources = append(snapshot.SkillResources, SkillResourceSnapshot{Caster: key.Caster, ProgramID: key.Skill, Stock: state.stock, MaxStock: state.maxStock, RechargeTicks: state.rechargeTicks, RechargeDue: state.rechargeDue, RechargeScheduled: state.rechargeScheduled, RechargeGeneration: state.rechargeGeneration})
+		result = append(result, skillResourceSnapshot(key, state))
 	}
-	sort.Slice(snapshot.SkillResources, func(i, j int) bool {
-		if snapshot.SkillResources[i].Caster != snapshot.SkillResources[j].Caster {
-			return snapshot.SkillResources[i].Caster < snapshot.SkillResources[j].Caster
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Caster != result[j].Caster {
+			return result[i].Caster < result[j].Caster
 		}
-		return snapshot.SkillResources[i].ProgramID < snapshot.SkillResources[j].ProgramID
+		return result[i].ProgramID < result[j].ProgramID
 	})
+	return result
+}
+
+func (runtime *Runtime) abilitySnapshotLocked(state *abilityState) AbilityStateSnapshot {
+	remaining := runtime.cooldowns[cooldownKey{Caster: state.owner, Skill: state.program.id}] - runtime.currentTick
+	if remaining < 0 {
+		remaining = 0
+	}
+	ability := AbilityStateSnapshot{Owner: state.owner, Handle: state.handle, Slot: state.slot, Tags: append([]GameplayTagHandle(nil), state.tags...), ProgramID: state.program.id, GameplayDigest: state.program.identity.gameplayDigest, CooldownTotal: state.cooldownTotal, CooldownRemaining: remaining, AmmoStock: state.ammoStock, AmmoMax: state.ammoMax, CastActive: state.castActive, LastCommitTick: state.lastCommitTick, LastFinishTick: state.lastFinishTick, Enabled: len(state.overlays) == 0}
+	for id, due := range state.overlays {
+		ability.Overlays = append(ability.Overlays, AbilityOverlaySnapshot{ID: id, DueTick: due})
+	}
+	sort.Slice(ability.Overlays, func(i, j int) bool { return ability.Overlays[i].ID < ability.Overlays[j].ID })
+	return ability
+}
+
+func (runtime *Runtime) abilitiesSnapshotLocked() []AbilityStateSnapshot {
+	result := make([]AbilityStateSnapshot, 0, len(runtime.abilities))
 	for _, state := range runtime.abilities {
-		remaining := runtime.cooldowns[cooldownKey{Caster: state.owner, Skill: state.program.id}] - runtime.currentTick
-		if remaining < 0 {
-			remaining = 0
-		}
-		ability := AbilityStateSnapshot{Owner: state.owner, Handle: state.handle, Slot: state.slot, Tags: append([]GameplayTagHandle(nil), state.tags...), ProgramID: state.program.id, GameplayDigest: state.program.identity.gameplayDigest, CooldownTotal: state.cooldownTotal, CooldownRemaining: remaining, AmmoStock: state.ammoStock, AmmoMax: state.ammoMax, CastActive: state.castActive, LastCommitTick: state.lastCommitTick, LastFinishTick: state.lastFinishTick, Enabled: len(state.overlays) == 0}
-		for id, due := range state.overlays {
-			ability.Overlays = append(ability.Overlays, AbilityOverlaySnapshot{ID: id, DueTick: due})
-		}
-		sort.Slice(ability.Overlays, func(i, j int) bool { return ability.Overlays[i].ID < ability.Overlays[j].ID })
-		snapshot.Abilities = append(snapshot.Abilities, ability)
+		result = append(result, runtime.abilitySnapshotLocked(state))
 	}
-	sort.Slice(snapshot.Abilities, func(i, j int) bool {
-		if snapshot.Abilities[i].Owner != snapshot.Abilities[j].Owner {
-			return snapshot.Abilities[i].Owner < snapshot.Abilities[j].Owner
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Owner != result[j].Owner {
+			return result[i].Owner < result[j].Owner
 		}
-		return snapshot.Abilities[i].Handle < snapshot.Abilities[j].Handle
+		return result[i].Handle < result[j].Handle
 	})
+	return result
+}
+
+func (runtime *Runtime) processesSnapshotLocked() []ProcessStateSnapshot {
+	result := make([]ProcessStateSnapshot, 0, len(runtime.processes))
 	processIDs := make([]int, 0, len(runtime.processes))
 	for id := range runtime.processes {
 		processIDs = append(processIDs, int(id))
@@ -276,47 +319,58 @@ func (runtime *Runtime) stateSnapshotLocked() RuntimeStateSnapshot {
 			}
 			view.Numeric = append(view.Numeric, item)
 		}
-		snapshot.Processes = append(snapshot.Processes, view)
+		result = append(result, view)
 	}
+	return result
+}
+
+func (runtime *Runtime) activePoliciesSnapshotLocked() []ActivePolicySnapshot {
+	result := make([]ActivePolicySnapshot, 0, len(runtime.activePolicies))
 	for key, castID := range runtime.activePolicies {
-		snapshot.ActivePolicies = append(snapshot.ActivePolicies, ActivePolicySnapshot{Caster: key.Caster, ProgramID: key.Skill, CastID: castID})
+		result = append(result, ActivePolicySnapshot{Caster: key.Caster, ProgramID: key.Skill, CastID: castID})
 	}
-	sort.Slice(snapshot.ActivePolicies, func(i, j int) bool {
-		if snapshot.ActivePolicies[i].Caster != snapshot.ActivePolicies[j].Caster {
-			return snapshot.ActivePolicies[i].Caster < snapshot.ActivePolicies[j].Caster
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Caster != result[j].Caster {
+			return result[i].Caster < result[j].Caster
 		}
-		return snapshot.ActivePolicies[i].ProgramID < snapshot.ActivePolicies[j].ProgramID
+		return result[i].ProgramID < result[j].ProgramID
 	})
-	if provider, ok := runtime.host.(RuntimeStateExtensionProvider); ok {
-		states := provider.SkillPersistentStateSnapshot()
-		snapshot.PersistentStates = append([]PersistentStateSnapshot(nil), states...)
-		for index := range snapshot.PersistentStates {
-			snapshot.PersistentStates[index].Value = cloneStateRuntimeValue(snapshot.PersistentStates[index].Value)
-			snapshot.PersistentStates[index].ClearOn = append([]string(nil), snapshot.PersistentStates[index].ClearOn...)
-		}
-		sort.Slice(snapshot.PersistentStates, func(i, j int) bool {
-			if snapshot.PersistentStates[i].Sequence != snapshot.PersistentStates[j].Sequence {
-				return snapshot.PersistentStates[i].Sequence < snapshot.PersistentStates[j].Sequence
-			}
-			leftHandle, rightHandle := snapshot.PersistentStates[i].Handle, snapshot.PersistentStates[j].Handle
-			if leftHandle.GameplayDigest != rightHandle.GameplayDigest {
-				return leftHandle.GameplayDigest < rightHandle.GameplayDigest
-			}
-			if leftHandle.Slot != rightHandle.Slot {
-				return leftHandle.Slot < rightHandle.Slot
-			}
-			if leftHandle.Shared != rightHandle.Shared {
-				return leftHandle.Shared < rightHandle.Shared
-			}
-			left, right := snapshot.PersistentStates[i].Binding, snapshot.PersistentStates[j].Binding
-			if left.Owner != right.Owner {
-				return left.Owner < right.Owner
-			}
-			if left.Subject != right.Subject {
-				return left.Subject < right.Subject
-			}
-			return left.Team < right.Team
-		})
+	return result
+}
+
+func (runtime *Runtime) persistentStatesSnapshotLocked() []PersistentStateSnapshot {
+	provider, ok := runtime.host.(RuntimeStateExtensionProvider)
+	if !ok {
+		return nil
 	}
-	return snapshot
+	states := provider.SkillPersistentStateSnapshot()
+	result := append([]PersistentStateSnapshot(nil), states...)
+	for index := range result {
+		result[index].Value = cloneStateRuntimeValue(result[index].Value)
+		result[index].ClearOn = append([]string(nil), result[index].ClearOn...)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Sequence != result[j].Sequence {
+			return result[i].Sequence < result[j].Sequence
+		}
+		leftHandle, rightHandle := result[i].Handle, result[j].Handle
+		if leftHandle.GameplayDigest != rightHandle.GameplayDigest {
+			return leftHandle.GameplayDigest < rightHandle.GameplayDigest
+		}
+		if leftHandle.Slot != rightHandle.Slot {
+			return leftHandle.Slot < rightHandle.Slot
+		}
+		if leftHandle.Shared != rightHandle.Shared {
+			return leftHandle.Shared < rightHandle.Shared
+		}
+		left, right := result[i].Binding, result[j].Binding
+		if left.Owner != right.Owner {
+			return left.Owner < right.Owner
+		}
+		if left.Subject != right.Subject {
+			return left.Subject < right.Subject
+		}
+		return left.Team < right.Team
+	})
+	return result
 }

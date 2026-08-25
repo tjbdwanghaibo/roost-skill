@@ -57,6 +57,13 @@ func runTypeCheckPass(context *compileContext) {
 	}
 
 	root := checker.baseScope()
+	window := context.artifacts.ir.activation.castWindow
+	if window.hasWindupExpression {
+		checker.expect(window.windupExpression, root, quantityType(quantityTicks))
+	}
+	if window.hasRecoveryExpression {
+		checker.expect(window.recoveryExpression, root, quantityType(quantityTicks))
+	}
 	for _, cost := range context.artifacts.ir.costs {
 		checker.expect(cost.amount, root, quantityType(quantityResourceAmount))
 	}

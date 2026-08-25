@@ -105,13 +105,17 @@ func gameplayProgramDigestPayload(program *Program) any {
 	}
 	return map[string]any{
 		"id": program.id, "compiler_semantics_revision": program.compilerSemanticsRevision,
-		"authority": program.authority, "activation_kind": program.activationKind, "cooldown_scope": program.cooldownScope, "cooldown_ticks": program.cooldownTicks,
+		"authority": program.authority, "activation_kind": program.activationKind, "cooldown_scope": program.cooldownScope, "cooldown_ticks": program.cooldownTicks, "global_cooldown_ticks": program.globalCooldownTicks,
 		"initial_phase": program.initialPhase, "gameplay_tags": program.gameplayTags,
 		"cast": map[string]any{
 			"windup_ticks": program.cast.windupTicks, "commit_tick": program.cast.commitTick, "recovery_ticks": program.cast.recoveryTicks,
+			"has_windup_expression": program.cast.hasWindupExpression, "windup_expression": programValueDigest(program.cast.windupExpression),
+			"windup_ticks_min": program.cast.windupTicksMin, "windup_ticks_max": program.cast.windupTicksMax,
+			"has_recovery_expression": program.cast.hasRecoveryExpression, "recovery_expression": programValueDigest(program.cast.recoveryExpression),
+			"recovery_ticks_min": program.cast.recoveryTicksMin, "recovery_ticks_max": program.cast.recoveryTicksMax,
 			"movement": program.cast.movement, "turning": program.cast.turning, "interrupt_tags": program.cast.interruptTags,
-			"refund_before_commit": program.cast.refundBeforeCommit,
-			"mode":                 program.cast.mode, "pulse_interval_ticks": program.cast.pulseIntervalTicks, "max_duration_ticks": program.cast.maxDurationTicks,
+			"refund_before_commit": program.cast.refundBeforeCommit, "concurrent": program.cast.concurrent,
+			"mode": program.cast.mode, "pulse_interval_ticks": program.cast.pulseIntervalTicks, "max_duration_ticks": program.cast.maxDurationTicks,
 			"max_charge_ticks": program.cast.maxChargeTicks, "min_charge_bp": program.cast.minChargeBP, "auto_release": program.cast.autoRelease,
 			"max_stock": program.cast.maxStock, "recharge_ticks": program.cast.rechargeTicks, "initial_stock": program.cast.initialStock,
 			"sustain_costs": sustainCosts,

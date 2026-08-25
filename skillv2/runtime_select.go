@@ -30,15 +30,28 @@ func (runtime *Runtime) executeQuery(cast *castInstance, selector selectorProgra
 	if selector.hasRandomSite {
 		invocation := cast.randomInvocations[selector.randomSite]
 		cast.randomInvocations[selector.randomSite] = invocation + 1
-		sort.SliceStable(elements, func(i, j int) bool {
-			leftID, rightID := stableSelectionID(elements[i], selector.element), stableSelectionID(elements[j], selector.element)
-			leftScore := randomCandidateScore(cast.randomKey, selector.randomSite, invocation, leftID)
-			rightScore := randomCandidateScore(cast.randomKey, selector.randomSite, invocation, rightID)
-			if comparison := bytes.Compare(leftScore[:], rightScore[:]); comparison != 0 {
+		// Precompute one HMAC score per candidate: the comparator used to
+		// rehash both sides on every comparison, costing O(n log n) SHA256
+		// invocations per query instead of O(n).
+		type scoredElement struct {
+			element selectionElement
+			id      uint64
+			score   [32]byte
+		}
+		scored := make([]scoredElement, len(elements))
+		for index, element := range elements {
+			id := stableSelectionID(element, selector.element)
+			scored[index] = scoredElement{element: element, id: id, score: randomCandidateScore(cast.randomKey, selector.randomSite, invocation, id)}
+		}
+		sort.SliceStable(scored, func(i, j int) bool {
+			if comparison := bytes.Compare(scored[i].score[:], scored[j].score[:]); comparison != 0 {
 				return comparison < 0
 			}
-			return leftID < rightID
+			return scored[i].id < scored[j].id
 		})
+		for index := range scored {
+			elements[index] = scored[index].element
+		}
 	}
 	if selector.limit > 0 && len(elements) > selector.limit {
 		elements = elements[:selector.limit]

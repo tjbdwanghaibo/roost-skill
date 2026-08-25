@@ -2,6 +2,7 @@ package skillv2
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"sort"
 )
@@ -87,34 +88,341 @@ func (runtime *Runtime) StateDeltas(after uint64, limit int) StateMutationBatch 
 	return batch
 }
 
+// stateMutationVerifyIncremental, when set (tests only), replays every
+// incremental commit against the reference full-snapshot diff and panics on
+// any divergence — the equivalence gate for the write-point fast path.
+var stateMutationVerifyIncremental bool
+
 func (runtime *Runtime) commitStateMutationsLocked() {
 	if !runtime.stateMutationDirty {
 		return
 	}
 	runtime.pruneCompletedCastsLocked()
 	runtime.stateMutationDirty = false
-	current := runtime.stateSnapshotLocked()
-	if !runtime.stateMutationReady {
+	if !runtime.stateMutationReady || runtime.stateMutationAllDirty {
+		current := runtime.stateSnapshotLocked()
+		runtime.clearStateMutationWritePointsLocked()
+		if !runtime.stateMutationReady {
+			runtime.stateMutationBaseline = current
+			runtime.stateMutationReady = true
+			return
+		}
+		mutations := diffRuntimeState(runtime.stateMutationBaseline, current)
+		runtime.appendStateMutationsLocked(mutations, current.Tick, current.WorldRevision, current.LatestStateEventSequence, current.LatestPresentationSequence)
+		current.LatestStateMutationSequence = runtime.stateMutationSequence
 		runtime.stateMutationBaseline = current
-		runtime.stateMutationReady = true
 		return
 	}
-	mutations := diffRuntimeState(runtime.stateMutationBaseline, current)
+	var referenceBaseline RuntimeStateSnapshot
+	if stateMutationVerifyIncremental {
+		referenceBaseline = cloneSnapshotDomains(runtime.stateMutationBaseline)
+	}
+	revision := WorldRevision(0)
+	if runtime.host != nil {
+		revision = runtime.host.CurrentRevision()
+	}
+	mutations := runtime.diffWritePointsLocked(revision)
+	runtime.appendStateMutationsLocked(mutations, runtime.currentTick, revision, runtime.stateEventSequence, runtime.presentationSequence)
+	baseline := &runtime.stateMutationBaseline
+	baseline.Tick, baseline.WorldRevision = runtime.currentTick, revision
+	baseline.LatestStateEventSequence = runtime.stateEventSequence
+	baseline.LatestPresentationSequence = runtime.presentationSequence
+	baseline.LatestStateMutationSequence = runtime.stateMutationSequence
+	if stateMutationVerifyIncremental {
+		runtime.verifyIncrementalCommitLocked(referenceBaseline, mutations)
+	}
+}
+
+func (runtime *Runtime) appendStateMutationsLocked(mutations []StateMutation, tick Tick, revision WorldRevision, eventSequence, presentationSequence uint64) {
 	for index := range mutations {
 		runtime.stateMutationSequence++
 		mutations[index].Sequence = runtime.stateMutationSequence
-		mutations[index].Tick = current.Tick
-		mutations[index].WorldRevision = current.WorldRevision
-		mutations[index].LatestStateEventSequence = current.LatestStateEventSequence
-		mutations[index].LatestPresentationSequence = current.LatestPresentationSequence
+		mutations[index].Tick = tick
+		mutations[index].WorldRevision = revision
+		mutations[index].LatestStateEventSequence = eventSequence
+		mutations[index].LatestPresentationSequence = presentationSequence
 		runtime.stateMutations = append(runtime.stateMutations, cloneStateMutation(mutations[index]))
 	}
-	current.LatestStateMutationSequence = runtime.stateMutationSequence
-	runtime.stateMutationBaseline = current
 	if overflow := len(runtime.stateMutations) - runtime.options.StateMutationLimit; overflow > 0 {
 		copy(runtime.stateMutations, runtime.stateMutations[overflow:])
 		runtime.stateMutations = runtime.stateMutations[:runtime.options.StateMutationLimit]
 		runtime.stateMutationDropped += uint64(overflow)
+	}
+}
+
+// diffWritePointsLocked computes the window's mutations from the recorded
+// write points and advances the baseline in place, keeping it byte-identical
+// with a full stateSnapshotLocked (the checkpoint invariant). Cooldowns,
+// skill resources, abilities and active policies are key-tracked at their
+// write sites; casts, processes and persistent states mutate through too many
+// deep write points to record safely, so those domains are rebuilt wholesale
+// and diffed exactly like the full path.
+func (runtime *Runtime) diffWritePointsLocked(revision WorldRevision) []StateMutation {
+	baseline := &runtime.stateMutationBaseline
+	clockChanged := baseline.Tick != runtime.currentTick || baseline.WorldRevision != revision ||
+		baseline.LatestStateEventSequence != runtime.stateEventSequence ||
+		baseline.LatestPresentationSequence != runtime.presentationSequence
+	if deltaTick := runtime.currentTick - baseline.Tick; deltaTick != 0 {
+		// Clock-derived fields, advanced arithmetically. Ticks are monotonic,
+		// so max(0, due-tick) folds to max(0, remaining-delta) exactly.
+		for index := range baseline.Cooldowns {
+			if remaining := baseline.Cooldowns[index].Remaining - deltaTick; remaining > 0 {
+				baseline.Cooldowns[index].Remaining = remaining
+			} else {
+				baseline.Cooldowns[index].Remaining = 0
+			}
+		}
+		for index := range baseline.Abilities {
+			if remaining := baseline.Abilities[index].CooldownRemaining - deltaTick; remaining > 0 {
+				baseline.Abilities[index].CooldownRemaining = remaining
+			} else {
+				baseline.Abilities[index].CooldownRemaining = 0
+			}
+		}
+	}
+	var result []StateMutation
+	casts := runtime.castsSnapshotLocked()
+	result = diffCastStates(result, baseline.Casts, casts)
+	baseline.Casts = casts
+	processes := runtime.processesSnapshotLocked()
+	result = diffProcessStates(result, baseline.Processes, processes)
+	baseline.Processes = processes
+	persistent := runtime.persistentStatesSnapshotLocked()
+	result = diffPersistentStates(result, baseline.PersistentStates, persistent)
+	baseline.PersistentStates = persistent
+	result = runtime.applyCooldownWritePointsLocked(result)
+	result = runtime.applySkillResourceWritePointsLocked(result)
+	result = runtime.applyAbilityWritePointsLocked(result)
+	result = runtime.applyActivePolicyWritePointsLocked(result)
+	if clockChanged {
+		result = append(result, StateMutation{Kind: StateMutationClock})
+	}
+	sort.SliceStable(result, func(i, j int) bool { return mutationSortKey(result[i]) < mutationSortKey(result[j]) })
+	return result
+}
+
+func (runtime *Runtime) applyCooldownWritePointsLocked(result []StateMutation) []StateMutation {
+	if len(runtime.dirtyCooldowns) == 0 {
+		return result
+	}
+	baseline := &runtime.stateMutationBaseline
+	for key := range runtime.dirtyCooldowns {
+		index := sort.Search(len(baseline.Cooldowns), func(i int) bool {
+			if baseline.Cooldowns[i].Caster != key.Caster {
+				return baseline.Cooldowns[i].Caster >= key.Caster
+			}
+			return baseline.Cooldowns[i].ProgramID >= key.Skill
+		})
+		found := index < len(baseline.Cooldowns) && baseline.Cooldowns[index].Caster == key.Caster && baseline.Cooldowns[index].ProgramID == key.Skill
+		due, live := runtime.cooldowns[key]
+		if !live {
+			if found {
+				baseline.Cooldowns = append(baseline.Cooldowns[:index], baseline.Cooldowns[index+1:]...)
+				result = append(result, StateMutation{Kind: StateMutationCooldownRemove, Caster: key.Caster, ProgramID: key.Skill})
+				runtime.refreshBaselineAbilityCooldownLocked(key, 0)
+			}
+			continue
+		}
+		value := runtime.cooldownSnapshotLocked(key, due)
+		if !found || !cooldownStateEqualIgnoringClock(baseline.Cooldowns[index], value) {
+			copyValue := value
+			result = append(result, StateMutation{Kind: StateMutationCooldownUpsert, Caster: key.Caster, ProgramID: key.Skill, Cooldown: &copyValue})
+		}
+		if found {
+			baseline.Cooldowns[index] = value
+		} else {
+			baseline.Cooldowns = append(baseline.Cooldowns, CooldownStateSnapshot{})
+			copy(baseline.Cooldowns[index+1:], baseline.Cooldowns[index:])
+			baseline.Cooldowns[index] = value
+		}
+		runtime.refreshBaselineAbilityCooldownLocked(key, value.Remaining)
+	}
+	clear(runtime.dirtyCooldowns)
+	return result
+}
+
+// refreshBaselineAbilityCooldownLocked mirrors the snapshot rule that an
+// ability's CooldownRemaining is derived from its owner's cooldown entry.
+func (runtime *Runtime) refreshBaselineAbilityCooldownLocked(key cooldownKey, remaining Tick) {
+	abilities := runtime.stateMutationBaseline.Abilities
+	for index := range abilities {
+		if abilities[index].Owner == key.Caster && abilities[index].ProgramID == key.Skill {
+			abilities[index].CooldownRemaining = remaining
+		}
+	}
+}
+
+func (runtime *Runtime) applySkillResourceWritePointsLocked(result []StateMutation) []StateMutation {
+	if len(runtime.dirtyResources) == 0 {
+		return result
+	}
+	baseline := &runtime.stateMutationBaseline
+	for key := range runtime.dirtyResources {
+		index := sort.Search(len(baseline.SkillResources), func(i int) bool {
+			if baseline.SkillResources[i].Caster != key.Caster {
+				return baseline.SkillResources[i].Caster >= key.Caster
+			}
+			return baseline.SkillResources[i].ProgramID >= key.Skill
+		})
+		found := index < len(baseline.SkillResources) && baseline.SkillResources[index].Caster == key.Caster && baseline.SkillResources[index].ProgramID == key.Skill
+		state, live := runtime.skillStates[key]
+		if !live {
+			if found {
+				baseline.SkillResources = append(baseline.SkillResources[:index], baseline.SkillResources[index+1:]...)
+				result = append(result, StateMutation{Kind: StateMutationResourceRemove, Caster: key.Caster, ProgramID: key.Skill})
+			}
+			continue
+		}
+		value := skillResourceSnapshot(key, state)
+		if !found || baseline.SkillResources[index] != value {
+			copyValue := value
+			result = append(result, StateMutation{Kind: StateMutationResourceUpsert, Caster: key.Caster, ProgramID: key.Skill, Resource: &copyValue})
+		}
+		if found {
+			baseline.SkillResources[index] = value
+		} else {
+			baseline.SkillResources = append(baseline.SkillResources, SkillResourceSnapshot{})
+			copy(baseline.SkillResources[index+1:], baseline.SkillResources[index:])
+			baseline.SkillResources[index] = value
+		}
+	}
+	clear(runtime.dirtyResources)
+	return result
+}
+
+func (runtime *Runtime) applyAbilityWritePointsLocked(result []StateMutation) []StateMutation {
+	if len(runtime.dirtyAbilities) == 0 {
+		return result
+	}
+	baseline := &runtime.stateMutationBaseline
+	for key := range runtime.dirtyAbilities {
+		index := sort.Search(len(baseline.Abilities), func(i int) bool {
+			if baseline.Abilities[i].Owner != key.owner {
+				return baseline.Abilities[i].Owner >= key.owner
+			}
+			return baseline.Abilities[i].Handle >= key.handle
+		})
+		found := index < len(baseline.Abilities) && baseline.Abilities[index].Owner == key.owner && baseline.Abilities[index].Handle == key.handle
+		state, live := runtime.abilities[key]
+		if !live || state == nil {
+			if found {
+				baseline.Abilities = append(baseline.Abilities[:index], baseline.Abilities[index+1:]...)
+				result = append(result, StateMutation{Kind: StateMutationAbilityRemove, Owner: key.owner, AbilityHandle: key.handle})
+			}
+			continue
+		}
+		value := runtime.abilitySnapshotLocked(state)
+		if !found || !abilityStateEqualIgnoringClock(baseline.Abilities[index], value) {
+			copyValue := cloneAbilityState(value)
+			result = append(result, StateMutation{Kind: StateMutationAbilityUpsert, Owner: key.owner, AbilityHandle: key.handle, Ability: &copyValue})
+		}
+		if found {
+			baseline.Abilities[index] = value
+		} else {
+			baseline.Abilities = append(baseline.Abilities, AbilityStateSnapshot{})
+			copy(baseline.Abilities[index+1:], baseline.Abilities[index:])
+			baseline.Abilities[index] = value
+		}
+	}
+	clear(runtime.dirtyAbilities)
+	return result
+}
+
+func (runtime *Runtime) applyActivePolicyWritePointsLocked(result []StateMutation) []StateMutation {
+	if len(runtime.dirtyPolicies) == 0 {
+		return result
+	}
+	baseline := &runtime.stateMutationBaseline
+	for key := range runtime.dirtyPolicies {
+		index := sort.Search(len(baseline.ActivePolicies), func(i int) bool {
+			if baseline.ActivePolicies[i].Caster != key.Caster {
+				return baseline.ActivePolicies[i].Caster >= key.Caster
+			}
+			return baseline.ActivePolicies[i].ProgramID >= key.Skill
+		})
+		found := index < len(baseline.ActivePolicies) && baseline.ActivePolicies[index].Caster == key.Caster && baseline.ActivePolicies[index].ProgramID == key.Skill
+		castID, live := runtime.activePolicies[key]
+		if !live {
+			if found {
+				baseline.ActivePolicies = append(baseline.ActivePolicies[:index], baseline.ActivePolicies[index+1:]...)
+				result = append(result, StateMutation{Kind: StateMutationPolicyRemove, Caster: key.Caster, ProgramID: key.Skill})
+			}
+			continue
+		}
+		value := ActivePolicySnapshot{Caster: key.Caster, ProgramID: key.Skill, CastID: castID}
+		if !found || baseline.ActivePolicies[index] != value {
+			copyValue := value
+			result = append(result, StateMutation{Kind: StateMutationPolicyUpsert, Caster: key.Caster, ProgramID: key.Skill, Policy: &copyValue})
+		}
+		if found {
+			baseline.ActivePolicies[index] = value
+		} else {
+			baseline.ActivePolicies = append(baseline.ActivePolicies, ActivePolicySnapshot{})
+			copy(baseline.ActivePolicies[index+1:], baseline.ActivePolicies[index:])
+			baseline.ActivePolicies[index] = value
+		}
+	}
+	clear(runtime.dirtyPolicies)
+	return result
+}
+
+func (runtime *Runtime) clearStateMutationWritePointsLocked() {
+	runtime.stateMutationAllDirty = false
+	clear(runtime.dirtyCooldowns)
+	clear(runtime.dirtyResources)
+	clear(runtime.dirtyAbilities)
+	clear(runtime.dirtyPolicies)
+}
+
+// Write-point recorders. Every mutation of a key-tracked domain must call the
+// matching recorder before the window commits; a missed call surfaces as an
+// ErrCheckpointHostMismatch (baseline divergence) and is caught in tests by
+// stateMutationVerifyIncremental.
+func (runtime *Runtime) touchCooldownLocked(key cooldownKey) {
+	runtime.dirtyCooldowns[key] = struct{}{}
+}
+
+func (runtime *Runtime) touchSkillResourceLocked(key skillStateKey) {
+	runtime.dirtyResources[key] = struct{}{}
+}
+
+func (runtime *Runtime) touchAbilityLocked(key abilityKey) {
+	runtime.dirtyAbilities[key] = struct{}{}
+}
+
+func (runtime *Runtime) touchActivePolicyLocked(key skillStateKey) {
+	runtime.dirtyPolicies[key] = struct{}{}
+}
+
+func cloneSnapshotDomains(snapshot RuntimeStateSnapshot) RuntimeStateSnapshot {
+	snapshot.Casts = append([]CastStateSnapshot(nil), snapshot.Casts...)
+	snapshot.Cooldowns = append([]CooldownStateSnapshot(nil), snapshot.Cooldowns...)
+	snapshot.SkillResources = append([]SkillResourceSnapshot(nil), snapshot.SkillResources...)
+	snapshot.Abilities = append([]AbilityStateSnapshot(nil), snapshot.Abilities...)
+	snapshot.Processes = append([]ProcessStateSnapshot(nil), snapshot.Processes...)
+	snapshot.ActivePolicies = append([]ActivePolicySnapshot(nil), snapshot.ActivePolicies...)
+	snapshot.PersistentStates = append([]PersistentStateSnapshot(nil), snapshot.PersistentStates...)
+	return snapshot
+}
+
+func (runtime *Runtime) verifyIncrementalCommitLocked(before RuntimeStateSnapshot, got []StateMutation) {
+	current := runtime.stateSnapshotLocked()
+	if !runtimeSnapshotsEqual(runtime.stateMutationBaseline, current) {
+		panic("skillv2: incremental mutation baseline diverged from full snapshot")
+	}
+	expected := diffRuntimeState(before, current)
+	if len(expected) != len(got) {
+		panic(fmt.Sprintf("skillv2: incremental mutations diverged: %d mutations, reference has %d", len(got), len(expected)))
+	}
+	for index := range expected {
+		expected[index].Sequence = got[index].Sequence
+		expected[index].Tick = got[index].Tick
+		expected[index].WorldRevision = got[index].WorldRevision
+		expected[index].LatestStateEventSequence = got[index].LatestStateEventSequence
+		expected[index].LatestPresentationSequence = got[index].LatestPresentationSequence
+		if !reflect.DeepEqual(expected[index], got[index]) {
+			panic(fmt.Sprintf("skillv2: incremental mutation %d diverged: got %+v, reference %+v", index, got[index], expected[index]))
+		}
 	}
 }
 
@@ -129,48 +437,63 @@ func (runtime *Runtime) CaptureExternalState() {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
 	runtime.beginStateMutationLocked()
+	runtime.stateMutationAllDirty = true
 	runtime.commitStateMutationsLocked()
 }
 
 func diffRuntimeState(before, after RuntimeStateSnapshot) []StateMutation {
 	var result []StateMutation
-	beforeCasts := make(map[CastID]CastStateSnapshot, len(before.Casts))
-	for _, value := range before.Casts {
+	result = diffCastStates(result, before.Casts, after.Casts)
+	result = diffCooldownStates(result, before.Cooldowns, after.Cooldowns)
+	result = diffSkillResourceStates(result, before.SkillResources, after.SkillResources)
+	result = diffAbilityStates(result, before.Abilities, after.Abilities)
+	result = diffProcessStates(result, before.Processes, after.Processes)
+	result = diffActivePolicyStates(result, before.ActivePolicies, after.ActivePolicies)
+	result = diffPersistentStates(result, before.PersistentStates, after.PersistentStates)
+	if before.Tick != after.Tick || before.WorldRevision != after.WorldRevision || before.LatestStateEventSequence != after.LatestStateEventSequence || before.LatestPresentationSequence != after.LatestPresentationSequence {
+		result = append(result, StateMutation{Kind: StateMutationClock})
+	}
+	sort.SliceStable(result, func(i, j int) bool { return mutationSortKey(result[i]) < mutationSortKey(result[j]) })
+	return result
+}
+
+func diffCastStates(result []StateMutation, before, after []CastStateSnapshot) []StateMutation {
+	beforeCasts := make(map[CastID]CastStateSnapshot, len(before))
+	for _, value := range before {
 		beforeCasts[value.ID] = value
 	}
-	afterCasts := make(map[CastID]CastStateSnapshot, len(after.Casts))
-	for _, value := range after.Casts {
+	afterCasts := make(map[CastID]CastStateSnapshot, len(after))
+	for _, value := range after {
 		afterCasts[value.ID] = value
 		if previous, ok := beforeCasts[value.ID]; !ok || !castStateEqualIgnoringClock(previous, value) {
 			copyValue := value
 			result = append(result, StateMutation{Kind: StateMutationCastUpsert, CastID: value.ID, Cast: &copyValue})
 		}
 	}
-	for _, value := range before.Casts {
+	for _, value := range before {
 		if _, ok := afterCasts[value.ID]; !ok {
 			result = append(result, StateMutation{Kind: StateMutationCastRemove, CastID: value.ID})
 		}
 	}
+	return result
+}
 
-	type skillKey struct {
-		entity  EntityID
-		program string
-	}
-	for left, right := 0, 0; left < len(before.Cooldowns) || right < len(after.Cooldowns); {
-		if left == len(before.Cooldowns) {
-			value := after.Cooldowns[right]
+func diffCooldownStates(result []StateMutation, before, after []CooldownStateSnapshot) []StateMutation {
+	for left, right := 0, 0; left < len(before) || right < len(after); {
+		if left == len(before) {
+			value := after[right]
 			copyValue := value
 			result = append(result, StateMutation{Kind: StateMutationCooldownUpsert, Caster: value.Caster, ProgramID: value.ProgramID, Cooldown: &copyValue})
 			right++
 			continue
 		}
-		if right == len(after.Cooldowns) {
-			value := before.Cooldowns[left]
+		if right == len(after) {
+			value := before[left]
 			result = append(result, StateMutation{Kind: StateMutationCooldownRemove, Caster: value.Caster, ProgramID: value.ProgramID})
 			left++
 			continue
 		}
-		previous, value := before.Cooldowns[left], after.Cooldowns[right]
+		previous, value := before[left], after[right]
 		order := compareSkillState(previous.Caster, previous.ProgramID, value.Caster, value.ProgramID)
 		if order < 0 {
 			result = append(result, StateMutation{Kind: StateMutationCooldownRemove, Caster: previous.Caster, ProgramID: previous.ProgramID})
@@ -190,14 +513,22 @@ func diffRuntimeState(before, after RuntimeStateSnapshot) []StateMutation {
 		left++
 		right++
 	}
+	return result
+}
 
-	beforeResources := make(map[skillKey]SkillResourceSnapshot, len(before.SkillResources))
-	for _, value := range before.SkillResources {
-		beforeResources[skillKey{value.Caster, value.ProgramID}] = value
+type skillDiffKey struct {
+	entity  EntityID
+	program string
+}
+
+func diffSkillResourceStates(result []StateMutation, before, after []SkillResourceSnapshot) []StateMutation {
+	beforeResources := make(map[skillDiffKey]SkillResourceSnapshot, len(before))
+	for _, value := range before {
+		beforeResources[skillDiffKey{value.Caster, value.ProgramID}] = value
 	}
-	afterResources := make(map[skillKey]SkillResourceSnapshot, len(after.SkillResources))
-	for _, value := range after.SkillResources {
-		key := skillKey{value.Caster, value.ProgramID}
+	afterResources := make(map[skillDiffKey]SkillResourceSnapshot, len(after))
+	for _, value := range after {
+		key := skillDiffKey{value.Caster, value.ProgramID}
 		afterResources[key] = value
 		if previous, ok := beforeResources[key]; !ok || previous != value {
 			copyValue := value
@@ -209,17 +540,20 @@ func diffRuntimeState(before, after RuntimeStateSnapshot) []StateMutation {
 			result = append(result, StateMutation{Kind: StateMutationResourceRemove, Caster: key.entity, ProgramID: key.program})
 		}
 	}
+	return result
+}
 
+func diffAbilityStates(result []StateMutation, before, after []AbilityStateSnapshot) []StateMutation {
 	type abilityKeyView struct {
 		owner  EntityID
 		handle AbilityHandle
 	}
-	beforeAbilities := make(map[abilityKeyView]AbilityStateSnapshot, len(before.Abilities))
-	for _, value := range before.Abilities {
+	beforeAbilities := make(map[abilityKeyView]AbilityStateSnapshot, len(before))
+	for _, value := range before {
 		beforeAbilities[abilityKeyView{value.Owner, value.Handle}] = value
 	}
-	afterAbilities := make(map[abilityKeyView]AbilityStateSnapshot, len(after.Abilities))
-	for _, value := range after.Abilities {
+	afterAbilities := make(map[abilityKeyView]AbilityStateSnapshot, len(after))
+	for _, value := range after {
 		key := abilityKeyView{value.Owner, value.Handle}
 		afterAbilities[key] = value
 		if previous, ok := beforeAbilities[key]; !ok || !abilityStateEqualIgnoringClock(previous, value) {
@@ -232,13 +566,16 @@ func diffRuntimeState(before, after RuntimeStateSnapshot) []StateMutation {
 			result = append(result, StateMutation{Kind: StateMutationAbilityRemove, Owner: key.owner, AbilityHandle: key.handle})
 		}
 	}
+	return result
+}
 
-	beforeProcesses := make(map[ProcessID]ProcessStateSnapshot, len(before.Processes))
-	for _, value := range before.Processes {
+func diffProcessStates(result []StateMutation, before, after []ProcessStateSnapshot) []StateMutation {
+	beforeProcesses := make(map[ProcessID]ProcessStateSnapshot, len(before))
+	for _, value := range before {
 		beforeProcesses[value.ID] = value
 	}
-	afterProcesses := make(map[ProcessID]ProcessStateSnapshot, len(after.Processes))
-	for _, value := range after.Processes {
+	afterProcesses := make(map[ProcessID]ProcessStateSnapshot, len(after))
+	for _, value := range after {
 		afterProcesses[value.ID] = value
 		if previous, ok := beforeProcesses[value.ID]; !ok || !reflect.DeepEqual(previous, value) {
 			copyValue := cloneProcessState(value)
@@ -250,14 +587,17 @@ func diffRuntimeState(before, after RuntimeStateSnapshot) []StateMutation {
 			result = append(result, StateMutation{Kind: StateMutationProcessRemove, ProcessID: id})
 		}
 	}
+	return result
+}
 
-	beforePolicies := make(map[skillKey]ActivePolicySnapshot, len(before.ActivePolicies))
-	for _, value := range before.ActivePolicies {
-		beforePolicies[skillKey{value.Caster, value.ProgramID}] = value
+func diffActivePolicyStates(result []StateMutation, before, after []ActivePolicySnapshot) []StateMutation {
+	beforePolicies := make(map[skillDiffKey]ActivePolicySnapshot, len(before))
+	for _, value := range before {
+		beforePolicies[skillDiffKey{value.Caster, value.ProgramID}] = value
 	}
-	afterPolicies := make(map[skillKey]ActivePolicySnapshot, len(after.ActivePolicies))
-	for _, value := range after.ActivePolicies {
-		key := skillKey{value.Caster, value.ProgramID}
+	afterPolicies := make(map[skillDiffKey]ActivePolicySnapshot, len(after))
+	for _, value := range after {
+		key := skillDiffKey{value.Caster, value.ProgramID}
 		afterPolicies[key] = value
 		if previous, ok := beforePolicies[key]; !ok || previous != value {
 			copyValue := value
@@ -269,17 +609,20 @@ func diffRuntimeState(before, after RuntimeStateSnapshot) []StateMutation {
 			result = append(result, StateMutation{Kind: StateMutationPolicyRemove, Caster: key.entity, ProgramID: key.program})
 		}
 	}
+	return result
+}
 
+func diffPersistentStates(result []StateMutation, before, after []PersistentStateSnapshot) []StateMutation {
 	type persistentKey struct {
 		handle  StateHandle
 		binding StateScopeBinding
 	}
-	beforePersistent := make(map[persistentKey]PersistentStateSnapshot, len(before.PersistentStates))
-	for _, value := range before.PersistentStates {
+	beforePersistent := make(map[persistentKey]PersistentStateSnapshot, len(before))
+	for _, value := range before {
 		beforePersistent[persistentKey{value.Handle, value.Binding}] = value
 	}
-	afterPersistent := make(map[persistentKey]PersistentStateSnapshot, len(after.PersistentStates))
-	for _, value := range after.PersistentStates {
+	afterPersistent := make(map[persistentKey]PersistentStateSnapshot, len(after))
+	for _, value := range after {
 		key := persistentKey{value.Handle, value.Binding}
 		afterPersistent[key] = value
 		if previous, ok := beforePersistent[key]; !ok || !reflect.DeepEqual(previous, value) {
@@ -292,11 +635,6 @@ func diffRuntimeState(before, after RuntimeStateSnapshot) []StateMutation {
 			result = append(result, StateMutation{Kind: StateMutationPersistentRemove, StateHandle: key.handle, Binding: key.binding})
 		}
 	}
-
-	if before.Tick != after.Tick || before.WorldRevision != after.WorldRevision || before.LatestStateEventSequence != after.LatestStateEventSequence || before.LatestPresentationSequence != after.LatestPresentationSequence {
-		result = append(result, StateMutation{Kind: StateMutationClock})
-	}
-	sort.SliceStable(result, func(i, j int) bool { return mutationSortKey(result[i]) < mutationSortKey(result[j]) })
 	return result
 }
 

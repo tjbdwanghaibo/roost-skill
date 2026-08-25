@@ -100,20 +100,21 @@ func ParseGeneratedWithLimits(data []byte, limits ParseLimits) (GeneratedResult,
 
 func parseDefinition(data []byte) (*Definition, error) {
 	var raw struct {
-		Schema          string                     `json:"schema"`
-		ID              string                     `json:"id"`
-		Name            string                     `json:"name"`
-		Description     string                     `json:"description"`
-		Presentation    *SkillPresentation         `json:"presentation"`
-		GameplayTags    []string                   `json:"gameplay_tags"`
-		Activation      json.RawMessage            `json:"activation"`
-		InputSchema     json.RawMessage            `json:"input_schema"`
-		CooldownTicks   *Tick                      `json:"cooldown_ticks"`
-		Costs           *[]json.RawMessage         `json:"costs"`
-		Memory          map[string]json.RawMessage `json:"memory"`
-		PersistentState map[string]json.RawMessage `json:"persistent_state"`
-		InitialPhase    string                     `json:"initial_phase"`
-		Phases          []json.RawMessage          `json:"phases"`
+		Schema              string                     `json:"schema"`
+		ID                  string                     `json:"id"`
+		Name                string                     `json:"name"`
+		Description         string                     `json:"description"`
+		Presentation        *SkillPresentation         `json:"presentation"`
+		GameplayTags        []string                   `json:"gameplay_tags"`
+		Activation          json.RawMessage            `json:"activation"`
+		InputSchema         json.RawMessage            `json:"input_schema"`
+		CooldownTicks       *Tick                      `json:"cooldown_ticks"`
+		GlobalCooldownTicks Tick                       `json:"global_cooldown_ticks"`
+		Costs               *[]json.RawMessage         `json:"costs"`
+		Memory              map[string]json.RawMessage `json:"memory"`
+		PersistentState     map[string]json.RawMessage `json:"persistent_state"`
+		InitialPhase        string                     `json:"initial_phase"`
+		Phases              []json.RawMessage          `json:"phases"`
 	}
 	if err := decodeStrictSingle(data, &raw); err != nil {
 		return nil, err
@@ -169,7 +170,7 @@ func parseDefinition(data []byte) (*Definition, error) {
 	if err != nil {
 		return nil, fmt.Errorf("phases: %w", err)
 	}
-	return &Definition{Schema: raw.Schema, ID: raw.ID, Name: raw.Name, Description: raw.Description, Presentation: raw.Presentation, GameplayTags: raw.GameplayTags, Activation: activation, InputSchema: inputSchema, CooldownTicks: *raw.CooldownTicks, Costs: costs, Memory: memory, PersistentState: persistentState, InitialPhase: raw.InitialPhase, Phases: phases}, nil
+	return &Definition{Schema: raw.Schema, ID: raw.ID, Name: raw.Name, Description: raw.Description, Presentation: raw.Presentation, GameplayTags: raw.GameplayTags, Activation: activation, InputSchema: inputSchema, CooldownTicks: *raw.CooldownTicks, GlobalCooldownTicks: raw.GlobalCooldownTicks, Costs: costs, Memory: memory, PersistentState: persistentState, InitialPhase: raw.InitialPhase, Phases: phases}, nil
 }
 
 func decodeStrictSingle(data []byte, destination any) error {

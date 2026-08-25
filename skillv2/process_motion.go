@@ -92,16 +92,17 @@ func (runtime *Runtime) stepProcessMotion(cast *castInstance, process *ProcessIn
 		if !valid {
 			return nil, ErrRuntimeTypeMismatch
 		}
-		deltaX, deltaY := saturatingInt64Sub(targetPosition.X, position.X), saturatingInt64Sub(targetPosition.Y, position.Y)
-		length := maxInt64(absoluteDifference(deltaX, 0), absoluteDifference(deltaY, 0))
+		// Euclidean length: the normalized direction's Euclidean norm is the
+		// direction scale, so diagonal tracking moves at the same speed as
+		// axis-aligned tracking (the historical Chebyshev length made
+		// diagonal projectiles up to 41% faster).
+		length := integerDistance(position, targetPosition)
 		if length > 0 {
 			direction = normalizedDirection(position, targetPosition, length)
 		}
 	}
 	if process.Motion.Stage == MotionStageReturning && process.Motion.FrameAnchored {
-		deltaX := saturatingInt64Sub(process.Motion.FrameAnchor.X, position.X)
-		deltaY := saturatingInt64Sub(process.Motion.FrameAnchor.Y, position.Y)
-		length := maxInt64(absoluteDifference(deltaX, 0), absoluteDifference(deltaY, 0))
+		length := integerDistance(position, process.Motion.FrameAnchor)
 		if length == 0 {
 			direction = Direction{}
 		} else {
@@ -311,8 +312,11 @@ func hasProcessSignal(signals []ProcessSignal, kind ProcessSignalKind) bool {
 	return false
 }
 
+// motionDistance is the Euclidean distance used by every motion-stage
+// comparison, matching the input-validation metric so one world has one
+// distance semantic.
 func motionDistance(left, right Position) int64 {
-	return maxInt64(absoluteDifference(left.X, right.X), absoluteDifference(left.Y, right.Y))
+	return integerDistance(left, right)
 }
 
 func appendMotionStageSignals(process *ProcessInstance, aggregate, signals []ProcessSignal) []ProcessSignal {
@@ -424,7 +428,7 @@ func advanceMotionPath(position Position, points []Position, speed int64, index 
 	for *index < len(points) {
 		target := points[*index]
 		deltaX, deltaY := saturatingInt64Sub(target.X, position.X), saturatingInt64Sub(target.Y, position.Y)
-		distance := maxInt64(absoluteDifference(deltaX, 0), absoluteDifference(deltaY, 0))
+		distance := integerDistance(position, target)
 		if distance == 0 {
 			(*index)++
 			continue

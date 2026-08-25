@@ -117,9 +117,11 @@ func (runtime *Runtime) RegisterAbility(registration AbilityRegistration) error 
 	defer runtime.commitStateMutationsLocked()
 	state := &abilityState{owner: registration.Owner, handle: registration.Handle, slot: registration.Slot, tags: normalizeGameplayTagHandles(tags), program: registration.Program, ammoStock: registration.AmmoStock, ammoMax: registration.AmmoMax, overlays: make(map[uint64]Tick)}
 	runtime.abilities[abilityKey{owner: state.owner, handle: state.handle}] = state
+	runtime.touchAbilityLocked(abilityKey{owner: state.owner, handle: state.handle})
 	runtime.abilityByProgram[skillStateKey{Caster: state.owner, Skill: state.program.id}] = state.handle
 	if state.program.cast.mode == castModeAmmo {
 		runtime.skillStates[skillStateKey{Caster: state.owner, Skill: state.program.id}] = &skillState{stock: state.ammoStock, maxStock: state.ammoMax, rechargeTicks: state.program.cast.rechargeTicks}
+		runtime.touchSkillResourceLocked(skillStateKey{Caster: state.owner, Skill: state.program.id})
 	}
 	if state.handle > runtime.nextAbilityHandle {
 		runtime.nextAbilityHandle = state.handle
@@ -168,6 +170,7 @@ func (runtime *Runtime) ensureAbilityLocked(owner EntityID, program *Program) (*
 		}
 	}
 	runtime.abilities[abilityKey{owner: owner, handle: state.handle}] = state
+	runtime.touchAbilityLocked(abilityKey{owner: owner, handle: state.handle})
 	runtime.abilityByProgram[programKey] = state.handle
 	return state, nil
 }
@@ -195,11 +198,13 @@ func (runtime *Runtime) nextAbilitySlot(owner EntityID) int {
 func (runtime *Runtime) markAbilityCastStarted(cast *castInstance) {
 	if state := runtime.abilities[abilityKey{owner: cast.caster, handle: cast.ability}]; state != nil {
 		state.castActive++
+		runtime.touchAbilityLocked(abilityKey{owner: cast.caster, handle: cast.ability})
 	}
 }
 
 func (runtime *Runtime) markAbilityCommitted(cast *castInstance) {
 	if state := runtime.abilities[abilityKey{owner: cast.caster, handle: cast.ability}]; state != nil {
+		runtime.touchAbilityLocked(abilityKey{owner: cast.caster, handle: cast.ability})
 		state.cooldownTotal = cast.program.cooldownTicks
 		state.lastCommitTick = runtime.currentTick
 		if cast.program.cast.mode == castModeAmmo {
@@ -220,6 +225,7 @@ func (runtime *Runtime) markAbilityCastFinished(cast *castInstance) {
 			state.castActive--
 		}
 		state.lastFinishTick = runtime.currentTick
+		runtime.touchAbilityLocked(abilityKey{owner: cast.caster, handle: cast.ability})
 	}
 }
 
@@ -302,6 +308,7 @@ func (runtime *Runtime) modifyAbilityStateLocked(owner EntityID, ability Ability
 		runtime.nextAbilityOverlay++
 		overlayID := runtime.nextAbilityOverlay
 		state.overlays[overlayID] = runtime.currentTick + duration
+		runtime.touchAbilityLocked(abilityKey{owner: state.owner, handle: state.handle})
 		if err := runtime.scheduleSystem(runtime.currentTick+duration, &abilityOverlayExpiryTask{Owner: owner, Ability: ability, OverlayID: overlayID, Context: cloneEventContext(event)}); err != nil {
 			return AbilityChangeResult{}, err
 		}
@@ -338,8 +345,10 @@ func (runtime *Runtime) modifyAbilityStateLocked(owner EntityID, ability Ability
 	}
 	if property == "cooldown_remaining_ticks" {
 		runtime.cooldowns[cooldownKey{Caster: owner, Skill: state.program.id}] = runtime.currentTick + Tick(next)
+		runtime.touchCooldownLocked(cooldownKey{Caster: owner, Skill: state.program.id})
 	} else {
 		state.ammoStock = next
+		runtime.touchAbilityLocked(abilityKey{owner: state.owner, handle: state.handle})
 		if state.program.cast.mode == castModeAmmo {
 			ammo := runtime.skillStates[skillStateKey{Caster: owner, Skill: state.program.id}]
 			if ammo == nil {
@@ -351,6 +360,7 @@ func (runtime *Runtime) modifyAbilityStateLocked(owner EntityID, ability Ability
 				ammo.rechargeScheduled = false
 				ammo.rechargeGeneration++
 			}
+			runtime.touchSkillResourceLocked(skillStateKey{Caster: owner, Skill: state.program.id})
 		}
 	}
 	after := IntRuntimeValue(next, abilityPropertyQuantity(property))
@@ -447,6 +457,7 @@ func (runtime *Runtime) expireAbilityOverlay(task *abilityOverlayExpiryTask) err
 		return nil
 	}
 	delete(state.overlays, task.OverlayID)
+	runtime.touchAbilityLocked(abilityKey{owner: task.Owner, handle: task.Ability})
 	if len(state.overlays) == 0 {
 		context := cloneEventContext(task.Context)
 		context.Tick = runtime.currentTick

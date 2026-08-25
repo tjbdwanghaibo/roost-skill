@@ -13,6 +13,8 @@ var (
 	ErrAsyncFlowNotScheduled    = errors.New("skillv2: asynchronous flow is not scheduled")
 	ErrReverseAdvance           = errors.New("skillv2: cannot advance runtime backwards")
 	ErrCooldownActive           = errors.New("skillv2: skill is on cooldown")
+	ErrGlobalCooldownActive     = errors.New("skillv2: caster is on global cooldown")
+	ErrCasterBusy               = errors.New("skillv2: caster already has an active cast window")
 	ErrCastInputRejected        = errors.New("skillv2: cast does not accept gameplay input in its current state")
 )
 
@@ -218,6 +220,11 @@ type Runtime struct {
 	stateMutationBaseline   RuntimeStateSnapshot
 	stateMutationReady      bool
 	stateMutationDirty      bool
+	stateMutationAllDirty   bool
+	dirtyCooldowns          map[cooldownKey]struct{}
+	dirtyResources          map[skillStateKey]struct{}
+	dirtyAbilities          map[abilityKey]struct{}
+	dirtyPolicies           map[skillStateKey]struct{}
 }
 
 func NewRuntime(host Host, options RuntimeOptions) *Runtime {
@@ -287,6 +294,8 @@ func NewRuntime(host Host, options RuntimeOptions) *Runtime {
 		skillStates: make(map[skillStateKey]*skillState), activePolicies: make(map[skillStateKey]CastID),
 		procLedger: make(map[procLedgerKey]struct{}), rootEventCounts: make(map[EventID]int),
 		abilities: make(map[abilityKey]*abilityState), abilityByProgram: make(map[skillStateKey]AbilityHandle),
+		dirtyCooldowns: make(map[cooldownKey]struct{}), dirtyResources: make(map[skillStateKey]struct{}),
+		dirtyAbilities: make(map[abilityKey]struct{}), dirtyPolicies: make(map[skillStateKey]struct{}),
 	}
 	if host != nil {
 		for _, event := range host.Events(0) {
@@ -356,6 +365,17 @@ func (runtime *Runtime) startLocked(program *Program, input CastInput, parentEve
 				return activeID, runtime.releaseCast(active, "toggle_off")
 			}
 			delete(runtime.activePolicies, policyKey)
+			runtime.touchActivePolicyLocked(policyKey)
+		}
+	}
+	if parentEvent == nil && program.activationKind == "active" {
+		// Root activations respect caster exclusivity and the global
+		// cooldown; proc- and passive-triggered casts bypass both.
+		if !program.cast.concurrent && runtime.casterWindowBusyLocked(input.Caster) {
+			return 0, ErrCasterBusy
+		}
+		if runtime.cooldowns[cooldownKey{Caster: input.Caster, Skill: globalCooldownProgramID}] > runtime.currentTick {
+			return 0, ErrGlobalCooldownActive
 		}
 	}
 	tentativeID := runtime.nextCastID + 1

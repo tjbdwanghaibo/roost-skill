@@ -20,21 +20,22 @@ type localSymbol struct {
 }
 
 type skillIR struct {
-	source          sourceRef
-	schema          string
-	id              string
-	name            string
-	description     string
-	presentation    *skillPresentationIR
-	gameplayTags    []string
-	activation      activationIR
-	input           inputIR
-	cooldownTicks   Tick
-	costs           []costIR
-	memory          map[string]memoryDeclarationIR
-	persistentState map[string]stateDeclarationIR
-	initialPhase    string
-	phases          []phaseIR
+	source              sourceRef
+	schema              string
+	id                  string
+	name                string
+	description         string
+	presentation        *skillPresentationIR
+	gameplayTags        []string
+	activation          activationIR
+	input               inputIR
+	cooldownTicks       Tick
+	globalCooldownTicks Tick
+	costs               []costIR
+	memory              map[string]memoryDeclarationIR
+	persistentState     map[string]stateDeclarationIR
+	initialPhase        string
+	phases              []phaseIR
 }
 
 type skillPresentationIR struct {
@@ -94,13 +95,22 @@ type activationIR struct {
 }
 
 type castWindowIR struct {
-	windupTicks        Tick
-	commitTick         Tick
-	recoveryTicks      Tick
-	movement           string
-	turning            string
-	interruptTags      []string
-	refundBeforeCommit bool
+	windupTicks           Tick
+	hasWindupExpression   bool
+	windupExpression      valueIR
+	windupTicksMin        Tick
+	windupTicksMax        Tick
+	commitTick            Tick
+	recoveryTicks         Tick
+	hasRecoveryExpression bool
+	recoveryExpression    valueIR
+	recoveryTicksMin      Tick
+	recoveryTicksMax      Tick
+	movement              string
+	turning               string
+	interruptTags         []string
+	refundBeforeCommit    bool
+	concurrent            bool
 }
 
 type eventFilterIR struct{ requiredTags, excludedTags, elements, damageTypes, results []string }

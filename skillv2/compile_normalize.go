@@ -31,20 +31,21 @@ func normalizeDefinition(definition *Definition) (*skillIR, sourceMap, []Diagnos
 	}
 	n.checkIdentifier(definition.ID, "$.id")
 	result := &skillIR{
-		source:          n.source("$"),
-		schema:          definition.Schema,
-		id:              definition.ID,
-		name:            definition.Name,
-		description:     definition.Description,
-		gameplayTags:    append([]string(nil), definition.GameplayTags...),
-		activation:      n.normalizeActivation(definition.Activation, "$.activation"),
-		input:           n.normalizeInput(definition.InputSchema, "$.input_schema"),
-		cooldownTicks:   definition.CooldownTicks,
-		costs:           n.normalizeCosts(definition.Costs, "$.costs"),
-		memory:          n.normalizeMemory(definition.Memory),
-		persistentState: n.normalizePersistentState(definition.PersistentState),
-		initialPhase:    definition.InitialPhase,
-		phases:          make([]phaseIR, len(definition.Phases)),
+		source:              n.source("$"),
+		schema:              definition.Schema,
+		id:                  definition.ID,
+		name:                definition.Name,
+		description:         definition.Description,
+		gameplayTags:        append([]string(nil), definition.GameplayTags...),
+		activation:          n.normalizeActivation(definition.Activation, "$.activation"),
+		input:               n.normalizeInput(definition.InputSchema, "$.input_schema"),
+		cooldownTicks:       definition.CooldownTicks,
+		globalCooldownTicks: definition.GlobalCooldownTicks,
+		costs:               n.normalizeCosts(definition.Costs, "$.costs"),
+		memory:              n.normalizeMemory(definition.Memory),
+		persistentState:     n.normalizePersistentState(definition.PersistentState),
+		initialPhase:        definition.InitialPhase,
+		phases:              make([]phaseIR, len(definition.Phases)),
 	}
 	if definition.Presentation != nil {
 		result.presentation = &skillPresentationIR{iconKeywords: append([]string(nil), definition.Presentation.IconKeywords...), cast: normalizeVisual(definition.Presentation.Cast)}
@@ -76,12 +77,24 @@ func (n *normalizer) normalizeActivation(value ActivationDefinition, path string
 		result.kind = "active"
 		result.policy = n.normalizePolicy(typed.Policy, path+".policy")
 		result.castWindow = castWindowIR{movement: "allowed", turning: "allowed", refundBeforeCommit: true}
+		result.castWindow.concurrent = typed.Concurrent
 		if typed.CastWindow != nil {
 			window := typed.CastWindow
 			result.castWindow = castWindowIR{
 				windupTicks: window.WindupTicks, commitTick: window.CommitTick, recoveryTicks: window.RecoveryTicks,
+				windupTicksMin: window.WindupTicksMin, windupTicksMax: window.WindupTicksMax,
+				recoveryTicksMin: window.RecoveryTicksMin, recoveryTicksMax: window.RecoveryTicksMax,
 				movement: window.Movement, turning: window.Turning,
 				interruptTags: append([]string(nil), window.InterruptTags...), refundBeforeCommit: window.RefundBeforeCommit,
+				concurrent: typed.Concurrent,
+			}
+			if window.WindupTicksExpression.Node != nil {
+				result.castWindow.hasWindupExpression = true
+				result.castWindow.windupExpression = n.normalizeValue(window.WindupTicksExpression, path+".cast_window.windup_ticks_expression")
+			}
+			if window.RecoveryTicksExpression.Node != nil {
+				result.castWindow.hasRecoveryExpression = true
+				result.castWindow.recoveryExpression = n.normalizeValue(window.RecoveryTicksExpression, path+".cast_window.recovery_ticks_expression")
 			}
 			if result.castWindow.movement == "" {
 				result.castWindow.movement = "allowed"

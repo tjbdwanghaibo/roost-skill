@@ -5,11 +5,42 @@ func runShapePass(context *compileContext) {
 		context.addDiagnostic(DiagnosticShapeInvalid, "$", "normalized IR is required")
 		return
 	}
+	if context.artifacts.ir.globalCooldownTicks < 0 {
+		context.addDiagnostic(DiagnosticShapeInvalid, "$.global_cooldown_ticks", "global cooldown ticks must be non-negative")
+	}
 	activation := context.artifacts.ir.activation
 	if activation.kind == "active" {
 		window := activation.castWindow
-		if window.windupTicks < 0 || window.commitTick < 0 || window.recoveryTicks < 0 || window.commitTick > window.windupTicks {
-			context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window", "cast window requires non-negative ticks and commit_tick <= windup_ticks")
+		if window.windupTicks < 0 || window.commitTick < 0 || window.recoveryTicks < 0 {
+			context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window", "cast window ticks must be non-negative")
+		}
+		if window.hasWindupExpression {
+			if window.windupTicks != 0 {
+				context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.windup_ticks", "windup_ticks must be omitted when windup_ticks_expression is set")
+			}
+			if window.windupTicksMin < 0 || window.windupTicksMax < window.windupTicksMin {
+				context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.windup_ticks_expression", "windup ticks bounds require 0 <= windup_ticks_min <= windup_ticks_max")
+			}
+			if window.commitTick > window.windupTicksMin {
+				context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.commit_tick", "commit_tick must not exceed windup_ticks_min")
+			}
+		} else {
+			if window.windupTicksMin != 0 || window.windupTicksMax != 0 {
+				context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.windup_ticks_min", "windup ticks bounds require windup_ticks_expression")
+			}
+			if window.commitTick > window.windupTicks {
+				context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window", "commit_tick must not exceed windup_ticks")
+			}
+		}
+		if window.hasRecoveryExpression {
+			if window.recoveryTicks != 0 {
+				context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.recovery_ticks", "recovery_ticks must be omitted when recovery_ticks_expression is set")
+			}
+			if window.recoveryTicksMin < 0 || window.recoveryTicksMax < window.recoveryTicksMin {
+				context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.recovery_ticks_expression", "recovery ticks bounds require 0 <= recovery_ticks_min <= recovery_ticks_max")
+			}
+		} else if window.recoveryTicksMin != 0 || window.recoveryTicksMax != 0 {
+			context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.recovery_ticks_min", "recovery ticks bounds require recovery_ticks_expression")
 		}
 		if window.movement != "allowed" && window.movement != "slow" && window.movement != "locked" {
 			context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.movement", "movement must be allowed, slow, or locked")

@@ -10,6 +10,7 @@ type Program struct {
 	activationKind            string
 	cooldownScope             string
 	cooldownTicks             Tick
+	globalCooldownTicks       Tick
 	initialPhase              PhaseIndex
 	cast                      castWindowProgram
 	costs                     []costProgram
@@ -58,23 +59,32 @@ type costProgram struct {
 }
 
 type castWindowProgram struct {
-	windupTicks        Tick
-	commitTick         Tick
-	recoveryTicks      Tick
-	movement           string
-	turning            string
-	interruptTags      []GameplayTagHandle
-	refundBeforeCommit bool
-	mode               castMode
-	pulseIntervalTicks Tick
-	maxDurationTicks   Tick
-	maxChargeTicks     Tick
-	minChargeBP        int64
-	autoRelease        bool
-	maxStock           int64
-	rechargeTicks      Tick
-	initialStock       int64
-	sustainCosts       []costProgram
+	windupTicks           Tick
+	hasWindupExpression   bool
+	windupExpression      programValue
+	windupTicksMin        Tick
+	windupTicksMax        Tick
+	commitTick            Tick
+	recoveryTicks         Tick
+	hasRecoveryExpression bool
+	recoveryExpression    programValue
+	recoveryTicksMin      Tick
+	recoveryTicksMax      Tick
+	movement              string
+	turning               string
+	interruptTags         []GameplayTagHandle
+	refundBeforeCommit    bool
+	concurrent            bool
+	mode                  castMode
+	pulseIntervalTicks    Tick
+	maxDurationTicks      Tick
+	maxChargeTicks        Tick
+	minChargeBP           int64
+	autoRelease           bool
+	maxStock              int64
+	rechargeTicks         Tick
+	initialStock          int64
+	sustainCosts          []costProgram
 }
 
 type attributeSnapshotProgram struct {
@@ -136,23 +146,29 @@ type ProgramView struct {
 }
 
 type CastWindowView struct {
-	WindupTicks        Tick
-	CommitTick         Tick
-	RecoveryTicks      Tick
-	Movement           string
-	Turning            string
-	InterruptTags      []GameplayTagHandle
-	RefundBeforeCommit bool
-	Mode               string
-	PulseIntervalTicks Tick
-	MaxDurationTicks   Tick
-	MaxChargeTicks     Tick
-	MinChargeBP        int64
-	AutoRelease        bool
-	MaxStock           int64
-	RechargeTicks      Tick
-	InitialStock       int64
-	SustainCostCount   int
+	WindupTicks           Tick
+	HasWindupExpression   bool
+	WindupTicksMin        Tick
+	WindupTicksMax        Tick
+	CommitTick            Tick
+	RecoveryTicks         Tick
+	HasRecoveryExpression bool
+	RecoveryTicksMin      Tick
+	RecoveryTicksMax      Tick
+	Movement              string
+	Turning               string
+	InterruptTags         []GameplayTagHandle
+	RefundBeforeCommit    bool
+	Mode                  string
+	PulseIntervalTicks    Tick
+	MaxDurationTicks      Tick
+	MaxChargeTicks        Tick
+	MinChargeBP           int64
+	AutoRelease           bool
+	MaxStock              int64
+	RechargeTicks         Tick
+	InitialStock          int64
+	SustainCostCount      int
 }
 
 type CostView struct {
