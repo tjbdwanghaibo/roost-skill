@@ -141,7 +141,7 @@ func (runtime *Runtime) completeCastRecovery(cast *castInstance) error {
 }
 
 func (runtime *Runtime) emitCastLifecycleEvent(cast *castInstance, kind string) {
-	cast.events = append(cast.events, RuntimeEvent{
+	runtime.appendCastEvent(cast, RuntimeEvent{
 		Tick: runtime.currentTick, Kind: kind, Entity: cast.caster,
 		Context: EventContext{Tick: runtime.currentTick, Source: cast.caster, Owner: cast.caster, Target: cast.primaryTarget, SkillID: cast.program.id, CastID: cast.id},
 	})

@@ -1,6 +1,6 @@
 package skillcompose
 
-import "github.com/tjbdwanghaibo/cube-skill/skillv2"
+import "github.com/tjbdwanghaibo/cube-skill/v2/skillv2"
 
 type SkillCompositionContract struct {
 	Version     string                    `json:"version"`
@@ -19,6 +19,13 @@ type SourceGrant struct {
 	Feature           FeatureKey      `json:"feature"`
 	AllowedTransforms []TransformKind `json:"allowed_transforms"`
 }
-type SourceObligation struct{ SourceID, Key string }
-type GenericPackageGrant struct{ Key string }
-type Constraint struct{ Key string }
+type SourceObligation struct {
+	SourceID string `json:"source_id"`
+	Key      string `json:"key"`
+}
+type GenericPackageGrant struct {
+	Key string `json:"key"`
+}
+type Constraint struct {
+	Key string `json:"key"`
+}

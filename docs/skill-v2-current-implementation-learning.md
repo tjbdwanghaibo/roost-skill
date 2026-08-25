@@ -375,14 +375,19 @@ status、effect-result 等引用；不可见标量变为同类型 missing，列�
 
 `skillsync/outbox.go` 同时限制全局 packet 数、JSON 字节数、每 observer/stream/epoch 数量和
 最老 pending age。限制也会在重启装载时执行，不能靠重启绕过。`PutBatch` 先去重并整体
-预检，持久化全部成功后才更新内存；ACK 批量删除失败时内存保持不变。
+预检，持久化全部成功后才更新内存；ACK 批量删除失败时内存保持不变。发布筛选只保留
+`MaxPublishBatch` 个候选，并对选中的 packet 设置进程内 publishing 占用，避免并发重试重复发布。
+ACK 使用 observer/stream/epoch 索引，只扫描该 stream 的有界 pending，而不是扫描全局队列；
+非事务 store 发生部分删除失败时，Coordinator 会立即用 retained History 补回缺失记录。
 
-`file_outbox.go` 的新记录带版本与 checksum，文件名由 packet identity 派生。启动时同时
-验证 JSON 结构、checksum、文件名身份和 Packet 基本不变量；保留对旧 record/packet-only
-文件的只读迁移兼容。生产监控至少告警 `PendingBytes` 和 `OldestPendingAge`。
+`file_outbox.go` 的记录带版本与 checksum，文件名由 packet identity 派生。启动时同时
+验证 JSON 结构、checksum、文件名身份和 Packet 基本不变量；旧 record/packet-only 文件会
+直接导致启动失败，不保留双读迁移逻辑。生产监控至少告警 `PendingBytes` 和
+`OldestPendingAge`。
 
 Coordinator 的 observer/key 锁使用引用计数，最后调用者退出即回收。`CloseObserver` 先把
-observer 标为 closed，再按稳定顺序取得其所有 view 锁并清理 history/outbox/cursor；关闭
+observer 标为 closed，再按稳定顺序取得其所有 view 锁，先清理 durable outbox，成功后才
+清理 History 和 cursor；关闭
 后发布会返回 `ErrObserverClosed`，只有显式 `OpenObserver` 才能重新接入，防止迟到 goroutine
 复活旧 session。
 

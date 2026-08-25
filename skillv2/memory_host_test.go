@@ -9,8 +9,7 @@ import (
 func TestHostCommandPayloadsAreNarrowAndTyped(t *testing.T) {
 	var _ EffectCommandPayload = TeleportCommand{}
 	var _ EffectCommandPayload = ResourceCommand{}
-	var _ ProcessCommandPayload = ProjectileStepCommand{}
-	if reflect.TypeOf(TeleportCommand{}).NumField() > 3 || reflect.TypeOf(ResourceCommand{}).NumField() > 4 || reflect.TypeOf(ProjectileStepCommand{}).NumField() > 3 {
+	if reflect.TypeOf(TeleportCommand{}).NumField() > 3 || reflect.TypeOf(ResourceCommand{}).NumField() > 4 {
 		t.Fatal("typed command payload became a wide union")
 	}
 }
@@ -72,7 +71,7 @@ func TestMemoryHostRaycastUsesHitDistanceThenStableCollider(t *testing.T) {
 
 func TestMemoryHostStopProcessIsIdempotent(t *testing.T) {
 	host := NewMemoryHost(AuthorityIdentity{Revision: "test", Digest: "test"})
-	_, err := host.StepProcess(ProcessStepCommand{Meta: ProcessCommandMeta{ProcessID: 7}, Payload: ProjectileStepCommand{}}, ProcessHostState{ProcessID: 7})
+	_, err := host.StepProcess(ProcessStepCommand{Meta: ProcessCommandMeta{ProcessID: 7}, Motion: StaticMotionStep{}}, ProcessHostState{ProcessID: 7})
 	if err != nil {
 		t.Fatal(err)
 	}

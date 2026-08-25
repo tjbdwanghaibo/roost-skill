@@ -1,6 +1,7 @@
 package skillsync
 
 import (
+	"container/heap"
 	"encoding/json"
 	"errors"
 	"sort"
@@ -14,6 +15,7 @@ var (
 	ErrOutboxStoreRequired    = errors.New("skillsync: durable outbox store is required")
 	ErrOutboxCapacityExceeded = errors.New("skillsync: outbox capacity exceeded")
 	ErrOutboxPendingTooOld    = errors.New("skillsync: oldest outbox packet exceeds maximum age")
+	ErrOutboxStoreLimit       = errors.New("skillsync: outbox store exceeds configured limits")
 )
 
 type OutboxStore interface {
@@ -43,14 +45,15 @@ type OutboxRecord struct {
 }
 
 // RecordOutboxStore persists retry metadata and packet age across restarts.
+// PutRecord is an atomic upsert for the packet identity.
 type RecordOutboxStore interface {
 	LoadRecords() ([]OutboxRecord, error)
 	PutRecord(OutboxRecord) error
 }
 
 // BatchRecordOutboxStore persists a group atomically. Stores backed by a
-// transactional database should implement it; other stores remain crash-safe
-// because individual records are immutable and idempotent.
+// transactional database should implement it; other stores must make each
+// PutRecord upsert crash-safe and idempotent.
 type BatchRecordOutboxStore interface {
 	PutRecords([]OutboxRecord) error
 }
@@ -68,6 +71,13 @@ type pendingPacket struct {
 	nextAttempt time.Time
 	createdAt   time.Time
 	bytes       int64
+	publishing  bool
+}
+
+type pendingStreamID struct {
+	observer syncstream.Observer
+	stream   syncstream.Stream
+	epoch    uint64
 }
 
 type OutboxOptions struct {
@@ -80,6 +90,7 @@ type OutboxOptions struct {
 	MaxPendingBytes     int64
 	MaxPendingPerStream int
 	MaxPendingAge       time.Duration
+	MaxPublishBatch     int
 }
 
 type OutboxMetrics struct {
@@ -96,18 +107,21 @@ type OutboxMetrics struct {
 // transport accepts it. This closes the undetectable "last publish failed"
 // window.
 type Outbox struct {
-	mutex        sync.Mutex
-	store        OutboxStore
-	ackRetry     time.Duration
-	failureRetry time.Duration
-	maxRetry     time.Duration
-	maxPackets   int
-	maxBytes     int64
-	maxPerStream int
-	maxAge       time.Duration
-	pendingBytes int64
-	pending      map[pendingID]*pendingPacket
-	metrics      OutboxMetrics
+	mutex           sync.Mutex
+	store           OutboxStore
+	ackRetry        time.Duration
+	failureRetry    time.Duration
+	maxRetry        time.Duration
+	maxPackets      int
+	maxBytes        int64
+	maxPerStream    int
+	maxAge          time.Duration
+	maxPublish      int
+	pendingBytes    int64
+	pending         map[pendingID]*pendingPacket
+	streamPending   map[pendingStreamID]map[uint64]pendingID
+	oldestCreatedAt time.Time
+	metrics         OutboxMetrics
 }
 
 func NewOutbox(options OutboxOptions) (*Outbox, error) {
@@ -135,7 +149,10 @@ func NewOutbox(options OutboxOptions) (*Outbox, error) {
 	if options.MaxPendingAge <= 0 {
 		options.MaxPendingAge = 24 * time.Hour
 	}
-	box := &Outbox{store: options.Store, ackRetry: options.AckRetryInterval, failureRetry: options.FailureRetryDelay, maxRetry: options.MaxRetryDelay, maxPackets: options.MaxPendingPackets, maxBytes: options.MaxPendingBytes, maxPerStream: options.MaxPendingPerStream, maxAge: options.MaxPendingAge, pending: make(map[pendingID]*pendingPacket)}
+	if options.MaxPublishBatch <= 0 {
+		options.MaxPublishBatch = 512
+	}
+	box := &Outbox{store: options.Store, ackRetry: options.AckRetryInterval, failureRetry: options.FailureRetryDelay, maxRetry: options.MaxRetryDelay, maxPackets: options.MaxPendingPackets, maxBytes: options.MaxPendingBytes, maxPerStream: options.MaxPendingPerStream, maxAge: options.MaxPendingAge, maxPublish: options.MaxPublishBatch, pending: make(map[pendingID]*pendingPacket), streamPending: make(map[pendingStreamID]map[uint64]pendingID)}
 	if options.Store != nil {
 		records, err := loadOutboxRecords(options.Store)
 		if err != nil {
@@ -157,8 +174,7 @@ func NewOutbox(options OutboxOptions) (*Outbox, error) {
 			if _, duplicate := box.pending[id]; duplicate {
 				return nil, ErrRecordInvalid
 			}
-			box.pending[id] = &pendingPacket{packet: packet.Clone(), attempts: record.Attempts, nextAttempt: record.NextAttempt, createdAt: record.CreatedAt, bytes: size}
-			box.pendingBytes += size
+			box.addPendingLocked(id, &pendingPacket{packet: packet.Clone(), attempts: record.Attempts, nextAttempt: record.NextAttempt, createdAt: record.CreatedAt, bytes: size})
 		}
 		if err := box.capacityError(time.Now(), nil, 0); err != nil {
 			return nil, err
@@ -169,6 +185,10 @@ func NewOutbox(options OutboxOptions) (*Outbox, error) {
 
 func packetID(packet syncstream.Packet) pendingID {
 	return pendingID{observer: packet.Observer, stream: packet.Stream, epoch: packet.Epoch, sequence: packet.Sequence}
+}
+
+func streamID(packet syncstream.Packet) pendingStreamID {
+	return pendingStreamID{observer: packet.Observer, stream: packet.Stream, epoch: packet.Epoch}
 }
 
 func loadOutboxRecords(store OutboxStore) ([]OutboxRecord, error) {
@@ -192,10 +212,6 @@ func outboxPacketBytes(packet syncstream.Packet) (int64, error) {
 	return int64(len(data)), err
 }
 
-func samePendingStream(id pendingID, packet syncstream.Packet) bool {
-	return id.observer == packet.Observer && id.stream == packet.Stream && id.epoch == packet.Epoch
-}
-
 func (box *Outbox) capacityError(now time.Time, packet *syncstream.Packet, additionalBytes int64) error {
 	additionalPackets := 0
 	if packet != nil {
@@ -205,36 +221,12 @@ func (box *Outbox) capacityError(now time.Time, packet *syncstream.Packet, addit
 		return ErrOutboxCapacityExceeded
 	}
 	if packet != nil {
-		perStream := 0
-		for id := range box.pending {
-			if samePendingStream(id, *packet) {
-				perStream++
-			}
-		}
-		if perStream+1 > box.maxPerStream {
+		if len(box.streamPending[streamID(*packet)])+1 > box.maxPerStream {
 			return ErrOutboxCapacityExceeded
 		}
-	} else {
-		type streamLimitKey struct {
-			observer syncstream.Observer
-			stream   syncstream.Stream
-			epoch    uint64
-		}
-		counts := make(map[streamLimitKey]int)
-		for id := range box.pending {
-			key := streamLimitKey{id.observer, id.stream, id.epoch}
-			counts[key]++
-			if counts[key] > box.maxPerStream {
-				return ErrOutboxCapacityExceeded
-			}
-		}
 	}
-	if box.maxAge > 0 {
-		for _, entry := range box.pending {
-			if !entry.createdAt.IsZero() && now.Sub(entry.createdAt) > box.maxAge {
-				return ErrOutboxPendingTooOld
-			}
-		}
+	if box.maxAge > 0 && !box.oldestCreatedAt.IsZero() && now.Sub(box.oldestCreatedAt) > box.maxAge {
+		return ErrOutboxPendingTooOld
 	}
 	return nil
 }
@@ -268,8 +260,7 @@ func (box *Outbox) Put(packet syncstream.Packet) error {
 			return err
 		}
 	}
-	box.pending[id] = &pendingPacket{packet: packet.Clone(), createdAt: now, bytes: size}
-	box.pendingBytes += size
+	box.addPendingLocked(id, &pendingPacket{packet: packet.Clone(), createdAt: now, bytes: size})
 	return nil
 }
 
@@ -290,11 +281,7 @@ func (box *Outbox) PutBatch(packets []syncstream.Packet) error {
 	}, 0, len(packets))
 	seen := make(map[pendingID]struct{}, len(packets))
 	additionalBytes := int64(0)
-	additionalPerStream := make(map[struct {
-		observer syncstream.Observer
-		stream   syncstream.Stream
-		epoch    uint64
-	}]int)
+	additionalPerStream := make(map[pendingStreamID]int)
 	for _, packet := range packets {
 		if packet.Stream.Topic == "" || packet.Epoch == 0 || packet.Sequence == 0 {
 			return ErrRecordInvalid
@@ -312,11 +299,7 @@ func (box *Outbox) PutBatch(packets []syncstream.Packet) error {
 			return err
 		}
 		additionalBytes += size
-		key := struct {
-			observer syncstream.Observer
-			stream   syncstream.Stream
-			epoch    uint64
-		}{packet.Observer, packet.Stream, packet.Epoch}
+		key := streamID(packet)
 		additionalPerStream[key]++
 		record := OutboxRecord{Packet: packet.Clone(), CreatedAt: now}
 		records = append(records, record)
@@ -329,13 +312,7 @@ func (box *Outbox) PutBatch(packets []syncstream.Packet) error {
 		return ErrOutboxCapacityExceeded
 	}
 	for key, additional := range additionalPerStream {
-		count := 0
-		for id := range box.pending {
-			if id.observer == key.observer && id.stream == key.stream && id.epoch == key.epoch {
-				count++
-			}
-		}
-		if count+additional > box.maxPerStream {
+		if len(box.streamPending[key])+additional > box.maxPerStream {
 			return ErrOutboxCapacityExceeded
 		}
 	}
@@ -357,8 +334,7 @@ func (box *Outbox) PutBatch(packets []syncstream.Packet) error {
 		}
 	}
 	for _, value := range entries {
-		box.pending[value.id] = value.entry
-		box.pendingBytes += value.entry.bytes
+		box.addPendingLocked(value.id, value.entry)
 	}
 	return nil
 }
@@ -383,9 +359,10 @@ func (box *Outbox) Acknowledge(observer syncstream.Observer, stream syncstream.S
 	}
 	box.mutex.Lock()
 	defer box.mutex.Unlock()
-	ids := make([]pendingID, 0)
-	for id := range box.pending {
-		if id.observer == observer && id.stream == stream && id.epoch == epoch && id.sequence <= sequence {
+	key := pendingStreamID{observer: observer, stream: stream, epoch: epoch}
+	ids := make([]pendingID, 0, len(box.streamPending[key]))
+	for pendingSequence, id := range box.streamPending[key] {
+		if pendingSequence <= sequence {
 			ids = append(ids, id)
 		}
 	}
@@ -452,6 +429,14 @@ func (box *Outbox) removePendingLocked(id pendingID, acknowledged bool) {
 	}
 	delete(box.pending, id)
 	box.pendingBytes -= entry.bytes
+	key := streamID(entry.packet)
+	delete(box.streamPending[key], id.sequence)
+	if len(box.streamPending[key]) == 0 {
+		delete(box.streamPending, key)
+	}
+	if entry.createdAt.Equal(box.oldestCreatedAt) {
+		box.recomputeOldestCreatedAt()
+	}
 	if box.pendingBytes < 0 {
 		box.pendingBytes = 0
 	}
@@ -460,35 +445,85 @@ func (box *Outbox) removePendingLocked(id pendingID, acknowledged bool) {
 	}
 }
 
+func (box *Outbox) addPendingLocked(id pendingID, entry *pendingPacket) {
+	box.pending[id] = entry
+	box.pendingBytes += entry.bytes
+	key := streamID(entry.packet)
+	sequences := box.streamPending[key]
+	if sequences == nil {
+		sequences = make(map[uint64]pendingID)
+		box.streamPending[key] = sequences
+	}
+	sequences[id.sequence] = id
+	box.noteCreatedAt(entry.createdAt)
+}
+
 func (box *Outbox) due(now time.Time, observer *syncstream.Observer, stream *syncstream.Stream) []syncstream.Packet {
 	box.mutex.Lock()
 	defer box.mutex.Unlock()
-	packets := make([]syncstream.Packet, 0)
+	packets := make(packetMaxHeap, 0, box.maxPublish)
 	for _, entry := range box.pending {
 		if observer != nil && entry.packet.Observer != *observer || stream != nil && entry.packet.Stream != *stream {
 			continue
 		}
-		if entry.nextAttempt.IsZero() || !entry.nextAttempt.After(now) {
-			packets = append(packets, entry.packet.Clone())
+		if entry.publishing || !entry.nextAttempt.IsZero() && entry.nextAttempt.After(now) {
+			continue
+		}
+		if len(packets) < box.maxPublish {
+			heap.Push(&packets, entry.packet.Clone())
+			continue
+		}
+		if packetLess(entry.packet, packets[0]) {
+			packets[0] = entry.packet.Clone()
+			heap.Fix(&packets, 0)
 		}
 	}
-	sort.Slice(packets, func(i, j int) bool {
-		if packets[i].Observer != packets[j].Observer {
-			return observerLess(packets[i].Observer, packets[j].Observer)
+	sort.Slice(packets, func(i, j int) bool { return packetLess(packets[i], packets[j]) })
+	for _, packet := range packets {
+		if entry := box.pending[packetID(packet)]; entry != nil {
+			entry.publishing = true
 		}
-		if packets[i].Stream.Topic != packets[j].Stream.Topic {
-			left, right := topicPriority(packets[i].Stream.Topic), topicPriority(packets[j].Stream.Topic)
-			if left != right {
-				return left < right
-			}
-			return packets[i].Stream.Topic < packets[j].Stream.Topic
-		}
-		if packets[i].Stream.Key != packets[j].Stream.Key {
-			return packets[i].Stream.Key < packets[j].Stream.Key
-		}
-		return packets[i].Sequence < packets[j].Sequence
-	})
+	}
 	return packets
+}
+
+// packetMaxHeap keeps the least preferred selected packet at index zero, so
+// due can retain only the best MaxPublishBatch candidates while scanning.
+type packetMaxHeap []syncstream.Packet
+
+func (packets packetMaxHeap) Len() int { return len(packets) }
+func (packets packetMaxHeap) Less(i, j int) bool {
+	return packetLess(packets[j], packets[i])
+}
+func (packets packetMaxHeap) Swap(i, j int) { packets[i], packets[j] = packets[j], packets[i] }
+func (packets *packetMaxHeap) Push(value any) {
+	*packets = append(*packets, value.(syncstream.Packet))
+}
+func (packets *packetMaxHeap) Pop() any {
+	values := *packets
+	last := values[len(values)-1]
+	*packets = values[:len(values)-1]
+	return last
+}
+
+func packetLess(left, right syncstream.Packet) bool {
+	if left.Observer != right.Observer {
+		return observerLess(left.Observer, right.Observer)
+	}
+	if left.Stream.Topic != right.Stream.Topic {
+		leftPriority, rightPriority := topicPriority(left.Stream.Topic), topicPriority(right.Stream.Topic)
+		if leftPriority != rightPriority {
+			return leftPriority < rightPriority
+		}
+		return left.Stream.Topic < right.Stream.Topic
+	}
+	if left.Stream.Key != right.Stream.Key {
+		return left.Stream.Key < right.Stream.Key
+	}
+	if left.Epoch != right.Epoch {
+		return left.Epoch < right.Epoch
+	}
+	return left.Sequence < right.Sequence
 }
 
 func topicPriority(topic string) int {
@@ -531,15 +566,18 @@ func (box *Outbox) PublishDue(publisher PacketPublisher, now time.Time, observer
 		return capacityErr
 	}
 	packets := box.due(now, observer, stream)
+	defer box.releasePublishing(packets)
 	var firstError error
 	for _, packet := range packets {
-		err := publisher.Publish(packet.Clone())
+		attemptErr := publisher.Publish(packet.Clone())
 		box.mutex.Lock()
 		entry := box.pending[packetID(packet)]
 		if entry != nil {
+			entry.publishing = false
+			previousAttempts, previousNextAttempt := entry.attempts, entry.nextAttempt
 			entry.attempts++
 			box.metrics.PublishAttempts++
-			if err == nil {
+			if attemptErr == nil {
 				box.metrics.PublishSuccesses++
 				entry.nextAttempt = now.Add(box.ackRetry)
 			} else {
@@ -553,13 +591,30 @@ func (box *Outbox) PublishDue(publisher PacketPublisher, now time.Time, observer
 				}
 				entry.nextAttempt = now.Add(delay)
 			}
+			if records, ok := box.store.(RecordOutboxStore); ok {
+				persistErr := records.PutRecord(OutboxRecord{Packet: entry.packet.Clone(), CreatedAt: entry.createdAt, Attempts: entry.attempts, NextAttempt: entry.nextAttempt})
+				if persistErr != nil {
+					entry.attempts, entry.nextAttempt = previousAttempts, previousNextAttempt
+					attemptErr = errors.Join(attemptErr, persistErr)
+				}
+			}
 		}
 		box.mutex.Unlock()
-		if err != nil && firstError == nil {
-			firstError = err
+		if attemptErr != nil {
+			firstError = errors.Join(firstError, attemptErr)
 		}
 	}
 	return firstError
+}
+
+func (box *Outbox) releasePublishing(packets []syncstream.Packet) {
+	box.mutex.Lock()
+	defer box.mutex.Unlock()
+	for _, packet := range packets {
+		if entry := box.pending[packetID(packet)]; entry != nil {
+			entry.publishing = false
+		}
+	}
 }
 
 func (box *Outbox) PublishNow(publisher PacketPublisher, now time.Time, observer *syncstream.Observer, stream *syncstream.Stream) error {
@@ -586,12 +641,21 @@ func (box *Outbox) Metrics() OutboxMetrics {
 	metrics := box.metrics
 	metrics.Pending = len(box.pending)
 	metrics.PendingBytes = box.pendingBytes
-	now := time.Now()
-	for _, entry := range box.pending {
-		age := now.Sub(entry.createdAt)
-		if age > metrics.OldestPendingAge {
-			metrics.OldestPendingAge = age
-		}
+	if !box.oldestCreatedAt.IsZero() {
+		metrics.OldestPendingAge = time.Since(box.oldestCreatedAt)
 	}
 	return metrics
+}
+
+func (box *Outbox) noteCreatedAt(createdAt time.Time) {
+	if !createdAt.IsZero() && (box.oldestCreatedAt.IsZero() || createdAt.Before(box.oldestCreatedAt)) {
+		box.oldestCreatedAt = createdAt
+	}
+}
+
+func (box *Outbox) recomputeOldestCreatedAt() {
+	box.oldestCreatedAt = time.Time{}
+	for _, entry := range box.pending {
+		box.noteCreatedAt(entry.createdAt)
+	}
 }

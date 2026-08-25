@@ -15,7 +15,7 @@ func TestProcessStopIsUnifiedAndIdempotent(t *testing.T) {
 	}
 	process := &ProcessInstance{ID: 7, CastID: castID, Status: ProcessRunning, Scope: ProcessScopeCast, HostState: ProcessHostState{ProcessID: 7, Active: true}}
 	runtime.processes[process.ID] = process
-	if _, err := host.StepProcess(ProcessStepCommand{Meta: ProcessCommandMeta{ProcessID: 7}, Payload: ProjectileStepCommand{}}, process.HostState); err != nil {
+	if _, err := host.StepProcess(ProcessStepCommand{Meta: ProcessCommandMeta{ProcessID: 7}, Motion: StaticMotionStep{}}, process.HostState); err != nil {
 		t.Fatal(err)
 	}
 	if err := runtime.stopProcess(runtime.casts[castID], process, StopCauseCancel); err != nil {

@@ -17,12 +17,7 @@ func (host *MemoryHost) StepProcess(command ProcessStepCommand, state ProcessHos
 	}
 	state.ProcessID = processID
 	if command.Motion == nil {
-		// Compatibility for callers that only register a process. Runtime motion
-		// execution always supplies one of the typed MotionStep variants.
-		state.Active = true
-		host.processes[processID] = memoryProcess{state: state, active: true}
-		receipt := host.commitLocked("process_stepped", 0, processID)
-		return ProcessStepResult{Commit: receipt, State: state}, nil
+		return ProcessStepResult{}, fmt.Errorf("skillv2: process motion step is required")
 	}
 	signals, finalize, err := host.applyMotionStepLocked(command.Motion, &state)
 	if err != nil {

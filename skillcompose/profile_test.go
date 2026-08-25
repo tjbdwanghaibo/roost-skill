@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/tjbdwanghaibo/cube-skill/skillv2"
+	"github.com/tjbdwanghaibo/cube-skill/v2/skillv2"
 )
 
 func TestProfileExtractionIsStableAndUsesInspectorFacts(t *testing.T) {

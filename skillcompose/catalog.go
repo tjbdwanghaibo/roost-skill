@@ -4,6 +4,8 @@ type FeatureKey string
 type FeatureKind string
 type TransformKind string
 
+const TransformIdentity TransformKind = "identity"
+
 type FeatureDescriptor struct {
 	Key                FeatureKey
 	Kind               FeatureKind

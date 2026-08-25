@@ -14,8 +14,9 @@ import (
 	"sort"
 )
 
-const RuntimeCheckpointVersion uint32 = 1
+const RuntimeCheckpointVersion uint32 = 2
 const RuntimeCheckpointMaxBytes = 64 << 20
+const RuntimeCheckpointMaxRecords = 1_000_000
 
 var (
 	ErrCheckpointCorrupt      = errors.New("skillv2: runtime checkpoint is corrupt")
@@ -64,6 +65,11 @@ type runtimeCheckpointPayload struct {
 	MaxOwnedPerOwner      int                       `json:"max_owned_per_owner"`
 	MaxOwnedPerProgram    int                       `json:"max_owned_per_program"`
 	MaxOwnedPerTemplate   int                       `json:"max_owned_per_template"`
+	MaxActiveCasts        int                       `json:"max_active_casts"`
+	MaxAbilities          int                       `json:"max_abilities"`
+	CompletedCastLimit    int                       `json:"completed_cast_limit"`
+	RootEventLimit        int                       `json:"root_event_limit"`
+	MaxProcLedgerEntries  int                       `json:"max_proc_ledger_entries"`
 	CurrentTick           Tick                      `json:"current_tick"`
 	EventCursor           EventCursor               `json:"event_cursor"`
 	NextCastID            CastID                    `json:"next_cast_id"`
@@ -328,7 +334,7 @@ func (runtime *Runtime) Checkpoint() (RuntimeCheckpoint, error) {
 	if err != nil {
 		return RuntimeCheckpoint{}, fmt.Errorf("%w: %v", ErrCheckpointCorrupt, err)
 	}
-	if len(data) > RuntimeCheckpointMaxBytes {
+	if len(data) > runtime.options.CheckpointMaxBytes || checkpointRecordCount(payload) > runtime.options.CheckpointMaxRecords {
 		return RuntimeCheckpoint{}, ErrCheckpointCorrupt
 	}
 	digest := sha256.Sum256(data)
@@ -336,21 +342,37 @@ func (runtime *Runtime) Checkpoint() (RuntimeCheckpoint, error) {
 }
 
 func RestoreRuntime(host Host, options RuntimeOptions, checkpoint RuntimeCheckpoint, resolver ProgramResolver) (*Runtime, error) {
+	if options.CheckpointMaxBytes <= 0 {
+		options.CheckpointMaxBytes = 16 << 20
+	} else if options.CheckpointMaxBytes > RuntimeCheckpointMaxBytes {
+		options.CheckpointMaxBytes = RuntimeCheckpointMaxBytes
+	}
+	if options.CheckpointMaxRecords <= 0 {
+		options.CheckpointMaxRecords = 200000
+	} else if options.CheckpointMaxRecords > RuntimeCheckpointMaxRecords {
+		options.CheckpointMaxRecords = RuntimeCheckpointMaxRecords
+	}
 	if checkpoint.Version != RuntimeCheckpointVersion {
 		return nil, ErrCheckpointUnsupported
 	}
-	if host == nil || resolver == nil || len(checkpoint.Payload) == 0 || len(checkpoint.Payload) > RuntimeCheckpointMaxBytes {
+	if host == nil || resolver == nil || len(checkpoint.Payload) == 0 || len(checkpoint.Payload) > options.CheckpointMaxBytes {
 		return nil, ErrCheckpointCorrupt
 	}
 	digest := sha256.Sum256(checkpoint.Payload)
 	if subtle.ConstantTimeCompare([]byte(checkpoint.Checksum), []byte(hex.EncodeToString(digest[:]))) != 1 {
 		return nil, ErrCheckpointCorrupt
 	}
+	if err := rejectDuplicateKeysWithLimits(checkpoint.Payload, ParseLimits{MaxBytes: options.CheckpointMaxBytes, MaxDepth: 128, MaxTokens: options.CheckpointMaxRecords * 64, MaxStringBytes: 1 << 20, MaxContainerEntries: options.CheckpointMaxRecords}); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrCheckpointCorrupt, err)
+	}
 	var payload runtimeCheckpointPayload
 	decoder := json.NewDecoder(bytes.NewReader(checkpoint.Payload))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&payload); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrCheckpointCorrupt, err)
+	}
+	if checkpointRecordCount(payload) > options.CheckpointMaxRecords {
+		return nil, ErrCheckpointCorrupt
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
@@ -359,6 +381,9 @@ func RestoreRuntime(host Host, options RuntimeOptions, checkpoint RuntimeCheckpo
 	if host.CurrentRevision() != payload.WorldRevision || !authorityMatches(payload.Authority, host.AuthorityIdentity()) {
 		return nil, ErrCheckpointHostMismatch
 	}
+	if !validCheckpointRuntimeLimits(payload) {
+		return nil, ErrCheckpointCorrupt
+	}
 	options.MatchSeed = payload.MatchSeed
 	options.SupportedCompilerSemanticsRevision = payload.SemanticsRevision
 	options.MaxPassiveActivationsPerTick = payload.MaxPassivePerTick
@@ -366,6 +391,11 @@ func RestoreRuntime(host Host, options RuntimeOptions, checkpoint RuntimeCheckpo
 	options.MaxOwnedProcessesPerOwner = payload.MaxOwnedPerOwner
 	options.MaxOwnedProcessesPerProgram = payload.MaxOwnedPerProgram
 	options.MaxOwnedProcessesPerTemplate = payload.MaxOwnedPerTemplate
+	options.MaxActiveCasts = payload.MaxActiveCasts
+	options.MaxAbilities = payload.MaxAbilities
+	options.CompletedCastLimit = payload.CompletedCastLimit
+	options.RootEventLimit = payload.RootEventLimit
+	options.MaxProcLedgerEntries = payload.MaxProcLedgerEntries
 	runtime := NewRuntime(host, options)
 	if err := runtime.restoreCheckpointPayload(payload, resolver); err != nil {
 		return nil, err
@@ -512,7 +542,7 @@ func (runtime *Runtime) checkpointPayloadLocked() (runtimeCheckpointPayload, err
 	if !runtime.stateMutationReady || !runtimeSnapshotsEqual(runtime.stateMutationBaseline, runtime.stateSnapshotLocked()) {
 		return runtimeCheckpointPayload{}, ErrCheckpointHostMismatch
 	}
-	p := runtimeCheckpointPayload{WorldRevision: runtime.host.CurrentRevision(), Authority: runtime.host.AuthorityIdentity(), MatchSeed: runtime.options.MatchSeed, SemanticsRevision: runtime.options.SupportedCompilerSemanticsRevision, MaxPassivePerTick: runtime.options.MaxPassiveActivationsPerTick, MaxOwned: runtime.options.MaxOwnedProcesses, MaxOwnedPerOwner: runtime.options.MaxOwnedProcessesPerOwner, MaxOwnedPerProgram: runtime.options.MaxOwnedProcessesPerProgram, MaxOwnedPerTemplate: runtime.options.MaxOwnedProcessesPerTemplate, CurrentTick: runtime.currentTick, EventCursor: runtime.eventCursor, NextCastID: runtime.nextCastID, NextTaskSequence: runtime.nextTaskSequence, NextFrameID: runtime.nextFrameID, NextProcessID: runtime.nextProcessID, NextPassiveActivation: runtime.nextPassiveActivationID, NextAbilityHandle: runtime.nextAbilityHandle, NextAbilityOverlay: runtime.nextAbilityOverlay, PassiveCountTick: runtime.passiveCountTick, PassiveCount: runtime.passiveCount, TraceSequence: runtime.traceSequence, PresentationSequence: runtime.presentationSequence, StateEventSequence: runtime.stateEventSequence, StateEventDropped: runtime.stateEventDropped, StateMutationSequence: runtime.stateMutationSequence, StateMutationDropped: runtime.stateMutationDropped, StateMutationBaseline: runtime.stateMutationBaseline, StateMutationReady: runtime.stateMutationReady}
+	p := runtimeCheckpointPayload{WorldRevision: runtime.host.CurrentRevision(), Authority: runtime.host.AuthorityIdentity(), MatchSeed: runtime.options.MatchSeed, SemanticsRevision: runtime.options.SupportedCompilerSemanticsRevision, MaxPassivePerTick: runtime.options.MaxPassiveActivationsPerTick, MaxOwned: runtime.options.MaxOwnedProcesses, MaxOwnedPerOwner: runtime.options.MaxOwnedProcessesPerOwner, MaxOwnedPerProgram: runtime.options.MaxOwnedProcessesPerProgram, MaxOwnedPerTemplate: runtime.options.MaxOwnedProcessesPerTemplate, MaxActiveCasts: runtime.options.MaxActiveCasts, MaxAbilities: runtime.options.MaxAbilities, CompletedCastLimit: runtime.options.CompletedCastLimit, RootEventLimit: runtime.options.RootEventLimit, MaxProcLedgerEntries: runtime.options.MaxProcLedgerEntries, CurrentTick: runtime.currentTick, EventCursor: runtime.eventCursor, NextCastID: runtime.nextCastID, NextTaskSequence: runtime.nextTaskSequence, NextFrameID: runtime.nextFrameID, NextProcessID: runtime.nextProcessID, NextPassiveActivation: runtime.nextPassiveActivationID, NextAbilityHandle: runtime.nextAbilityHandle, NextAbilityOverlay: runtime.nextAbilityOverlay, PassiveCountTick: runtime.passiveCountTick, PassiveCount: runtime.passiveCount, TraceSequence: runtime.traceSequence, PresentationSequence: runtime.presentationSequence, StateEventSequence: runtime.stateEventSequence, StateEventDropped: runtime.stateEventDropped, StateMutationSequence: runtime.stateMutationSequence, StateMutationDropped: runtime.stateMutationDropped, StateMutationBaseline: runtime.stateMutationBaseline, StateMutationReady: runtime.stateMutationReady}
 	castIDs := make([]int, 0, len(runtime.casts))
 	for id := range runtime.casts {
 		castIDs = append(castIDs, int(id))
@@ -786,6 +816,11 @@ func (runtime *Runtime) restoreCheckpointPayload(p runtimeCheckpointPayload, res
 			return err
 		}
 		runtime.casts[item.ID] = &castInstance{id: item.ID, program: program, caster: item.Caster, primaryTarget: item.PrimaryTarget, inputs: inputs, memory: memory, locals: locals, snapshots: snapshots, status: item.Status, currentPhase: item.CurrentPhase, visibleRevision: item.VisibleRevision, failure: item.Failure, randomKey: item.RandomKey, randomInvocations: random, eventContext: restoreCheckpointEvent(item.EventContext), phaseToken: item.PhaseToken, pendingTasks: item.PendingTasks, logicalFinished: item.LogicalFinished, areaCallbackFinish: item.AreaCallbackFinish, windowStage: item.WindowStage, startTick: item.StartTick, committed: item.Committed, costsPaid: item.CostsPaid, cooldownStarted: item.CooldownStarted, pulseIndex: item.PulseIndex, releaseReason: item.ReleaseReason, stock: item.Stock, maxStock: item.MaxStock, windowStartTick: item.WindowStartTick, pendingRootEvent: item.PendingRootEvent, policyActive: item.PolicyActive, cooldownOwner: item.CooldownOwner, ability: item.Ability, abilityFinished: item.AbilityFinished}
+		if item.Status == CastFinished || item.Status == CastFailed {
+			runtime.completedCastOrder = append(runtime.completedCastOrder, item.ID)
+		} else {
+			runtime.activeCastCount++
+		}
 	}
 	var err error
 	runtime.processes, err = restoreCheckpointProcesses(p.Processes, resolver, p.Authority, p.SemanticsRevision, p.NextProcessID)
@@ -908,7 +943,9 @@ func (runtime *Runtime) restoreCheckpointPayload(p runtimeCheckpointPayload, res
 			return ErrCheckpointCorrupt
 		}
 		runtime.rootEventCounts[item.ID] = item.Count
+		runtime.rootEventOrder = append(runtime.rootEventOrder, item.ID)
 	}
+	sort.Slice(runtime.rootEventOrder, func(i, j int) bool { return runtime.rootEventOrder[i] < runtime.rootEventOrder[j] })
 	for _, item := range p.Abilities {
 		key := abilityKey{owner: item.Owner, handle: item.Handle}
 		if item.Owner == 0 || item.Handle == 0 || runtime.abilities[key] != nil {
@@ -940,6 +977,9 @@ func (runtime *Runtime) restoreCheckpointPayload(p runtimeCheckpointPayload, res
 	if len(runtime.abilityByProgram) != len(runtime.abilities) {
 		return ErrCheckpointCorrupt
 	}
+	if runtime.activeCastCount > runtime.options.MaxActiveCasts || len(runtime.abilities) > runtime.options.MaxAbilities || len(runtime.completedCastOrder) > runtime.options.CompletedCastLimit || len(runtime.rootEventCounts) > runtime.options.RootEventLimit || len(runtime.procLedger) > runtime.options.MaxProcLedgerEntries {
+		return ErrCheckpointCorrupt
+	}
 	for key, state := range runtime.abilities {
 		if state == nil || runtime.abilityByProgram[skillStateKey{Caster: key.owner, Skill: state.program.id}] != key.handle {
 			return ErrCheckpointCorrupt
@@ -961,6 +1001,23 @@ func runtimeSnapshotsEqual(left, right RuntimeStateSnapshot) bool {
 	leftData, leftErr := json.Marshal(left)
 	rightData, rightErr := json.Marshal(right)
 	return leftErr == nil && rightErr == nil && bytes.Equal(leftData, rightData)
+}
+
+func checkpointRecordCount(payload runtimeCheckpointPayload) int {
+	counts := []int{len(payload.Casts), len(payload.Processes), len(payload.OwnedProcesses), len(payload.Frames), len(payload.Tasks), len(payload.Cooldowns), len(payload.SkillStates), len(payload.ActivePolicies), len(payload.ProcLedger), len(payload.RootEventCounts), len(payload.Abilities), len(payload.AbilityByProgram)}
+	maximum := int(^uint(0) >> 1)
+	total := 0
+	for _, count := range counts {
+		if count > maximum-total {
+			return maximum
+		}
+		total += count
+	}
+	return total
+}
+
+func validCheckpointRuntimeLimits(payload runtimeCheckpointPayload) bool {
+	return payload.SemanticsRevision != "" && payload.MaxPassivePerTick > 0 && payload.MaxOwned > 0 && payload.MaxOwnedPerOwner > 0 && payload.MaxOwnedPerProgram > 0 && payload.MaxOwnedPerTemplate > 0 && payload.MaxActiveCasts > 0 && payload.MaxAbilities > 0 && payload.CompletedCastLimit > 0 && payload.RootEventLimit > 0 && payload.MaxProcLedgerEntries > 0
 }
 
 func restoreCheckpointProcesses(values []checkpointProcess, resolver ProgramResolver, authority AuthorityIdentity, semantics string, nextID ProcessID) (map[ProcessID]*ProcessInstance, error) {

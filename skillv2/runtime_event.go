@@ -6,9 +6,24 @@ func (runtime *Runtime) drainHostEvents(cast *castInstance) {
 		if event.Cursor > runtime.eventCursor {
 			runtime.eventCursor = event.Cursor
 		}
-		cast.events = append(cast.events, cloneRuntimeEvent(event))
+		runtime.appendCastEvent(cast, event)
 		runtime.recordStateEvent(event)
 		_ = runtime.dispatchEvent(event.Context)
+	}
+	if compactor, ok := runtime.host.(HostEventCompactor); ok && runtime.eventCursor != 0 {
+		compactor.CompactEventsThrough(runtime.eventCursor)
+	}
+}
+
+func (runtime *Runtime) appendCastEvent(cast *castInstance, event RuntimeEvent) {
+	if cast == nil {
+		return
+	}
+	cast.events = append(cast.events, cloneRuntimeEvent(event))
+	if overflow := len(cast.events) - runtime.options.CastEventLimit; overflow > 0 {
+		copy(cast.events, cast.events[overflow:])
+		cast.events = cast.events[:runtime.options.CastEventLimit]
+		cast.eventsDropped += uint64(overflow)
 	}
 }
 

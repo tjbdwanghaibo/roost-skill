@@ -22,8 +22,16 @@ type procLedgerKey struct {
 func (runtime *Runtime) ActivatePassive(program *Program, event EventContext) (PassiveActivationID, error) {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
-	runtime.beginStateMutationLocked()
-	defer runtime.commitStateMutationsLocked()
+	root := event.RootEventID
+	if root == 0 {
+		root = event.EventID
+	}
+	if root == 0 {
+		return 0, ErrCastInputInvalid
+	}
+	if err := runtime.trackRootEventLocked(root); err != nil {
+		return 0, err
+	}
 	owner := event.Owner
 	if owner == 0 {
 		owner = event.Source
@@ -86,6 +94,14 @@ func (runtime *Runtime) executePassiveActivation(task *passiveActivationTask) er
 	if runtime.passiveCount >= runtime.options.MaxPassiveActivationsPerTick {
 		runtime.emitPassiveSuppressed(task, "max_activations_per_tick")
 		return nil
+	}
+	if plan.proc.OncePerRootEvent && len(runtime.procLedger) >= runtime.options.MaxProcLedgerEntries {
+		for len(runtime.procLedger) >= runtime.options.MaxProcLedgerEntries && runtime.evictInactiveRootLocked(root) {
+		}
+		if len(runtime.procLedger) >= runtime.options.MaxProcLedgerEntries {
+			runtime.emitPassiveSuppressed(task, "capacity")
+			return nil
+		}
 	}
 	input := passiveCastInput(program, task.Owner, task.Event)
 	castID, err := runtime.startLocked(program, input, &task.Event)

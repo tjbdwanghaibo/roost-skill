@@ -24,7 +24,7 @@ func (host *MemoryHost) applyStatusLocked(command StatusCommand) (EffectResult, 
 			host.revision++
 			host.appendContextEventLocked("combat_hook_"+hook, command.Target, 0, context)
 			host.appendContextEventLocked("status_immune", command.Target, 0, context)
-			return EffectResult{Commit: CommitReceipt{Revision: host.revision, Changed: true}, Payload: StatusEffectResult{ResultOutcome: successfulResultOutcome(), Result: StatusResult{Immune: true, Stacks: previousStacks, PreviousStacks: previousStacks, CurrentStacks: previousStacks, CombatHooks: []string{hook}}}}, nil
+			return EffectResult{Commit: CommitReceipt{Revision: host.revision, Changed: true}, Payload: StatusEffectResult{ResultOutcome: successfulResultOutcome(), Result: StatusResult{Immune: true, PreviousStacks: previousStacks, CurrentStacks: previousStacks, CombatHooks: []string{hook}}}}, nil
 		}
 	}
 	for _, immunity := range policy.ImmunityTags {
@@ -32,7 +32,7 @@ func (host *MemoryHost) applyStatusLocked(command StatusCommand) (EffectResult, 
 			context.Result = combatResultImmune
 			host.revision++
 			host.appendContextEventLocked("status_immune", command.Target, 0, context)
-			return EffectResult{Commit: CommitReceipt{Revision: host.revision, Changed: true}, Payload: StatusEffectResult{ResultOutcome: successfulResultOutcome(), Result: StatusResult{Immune: true, Stacks: previousStacks, PreviousStacks: previousStacks, CurrentStacks: previousStacks}}}, nil
+			return EffectResult{Commit: CommitReceipt{Revision: host.revision, Changed: true}, Payload: StatusEffectResult{ResultOutcome: successfulResultOutcome(), Result: StatusResult{Immune: true, PreviousStacks: previousStacks, CurrentStacks: previousStacks}}}, nil
 		}
 	}
 	duration := command.DurationTicks
@@ -90,7 +90,7 @@ func (host *MemoryHost) applyStatusLocked(command StatusCommand) (EffectResult, 
 	host.revision++
 	host.appendContextEventLocked("status_applied", command.Target, 0, context)
 	currentStacks := host.statusStacksLocked(command.Target, command.Status, 0)
-	return EffectResult{Commit: CommitReceipt{Revision: host.revision, Changed: true}, Payload: StatusEffectResult{ResultOutcome: successfulResultOutcome(), Result: StatusResult{Applied: true, Stacks: currentStacks, PreviousStacks: previousStacks, CurrentStacks: currentStacks, DueTick: due}}}, nil
+	return EffectResult{Commit: CommitReceipt{Revision: host.revision, Changed: true}, Payload: StatusEffectResult{ResultOutcome: successfulResultOutcome(), Result: StatusResult{Applied: true, PreviousStacks: previousStacks, CurrentStacks: currentStacks, DueTick: due}}}, nil
 }
 
 func (host *MemoryHost) entityHasGameplayTagLocked(target EntityID, tag GameplayTagHandle) bool {
@@ -168,14 +168,14 @@ func (host *MemoryHost) dispelStatusLocked(command DispelStatusCommand) (EffectR
 	}
 	host.filterStatusesLocked(remove)
 	if count == 0 {
-		return EffectResult{Commit: CommitReceipt{Revision: host.revision}, Payload: StatusEffectResult{ResultOutcome: successfulResultOutcome(), Result: StatusResult{Stacks: previousStacks, PreviousStacks: previousStacks, CurrentStacks: previousStacks}}}, nil
+		return EffectResult{Commit: CommitReceipt{Revision: host.revision}, Payload: StatusEffectResult{ResultOutcome: successfulResultOutcome(), Result: StatusResult{PreviousStacks: previousStacks, CurrentStacks: previousStacks}}}, nil
 	}
 	host.revision++
 	context := command.Event
 	context.Target, context.Result = command.Target, "status_dispelled"
 	host.appendContextEventLocked("status_dispelled", command.Target, 0, context)
 	currentStacks := previousStacks - removedStacks
-	return EffectResult{Commit: CommitReceipt{Revision: host.revision, Changed: true}, Payload: StatusEffectResult{ResultOutcome: successfulResultOutcome(), Result: StatusResult{Removed: true, Stacks: currentStacks, PreviousStacks: previousStacks, CurrentStacks: currentStacks, RemovedStacks: removedStacks}}}, nil
+	return EffectResult{Commit: CommitReceipt{Revision: host.revision, Changed: true}, Payload: StatusEffectResult{ResultOutcome: successfulResultOutcome(), Result: StatusResult{Removed: true, PreviousStacks: previousStacks, CurrentStacks: currentStacks, RemovedStacks: removedStacks}}}, nil
 }
 
 func (host *MemoryHost) applyAttributeModifierLocked(command AttributeModifierCommand) (EffectResult, error) {
@@ -431,7 +431,7 @@ func (host *MemoryHost) modifyStatusInstanceLocked(command ModifyStatusInstanceC
 	if remove {
 		currentStacks = 0
 	}
-	return EffectResult{Commit: receipt, Payload: StatusEffectResult{ResultOutcome: successfulResultOutcome(), Result: StatusResult{Applied: true, Removed: remove, Stacks: currentStacks, PreviousStacks: beforeStacks, CurrentStacks: currentStacks, RemovedStacks: max(0, beforeStacks-currentStacks), DueTick: instance.dueTick, PreviousDueTick: beforeDue, Status: command.Status, Created: created}}}, nil
+	return EffectResult{Commit: receipt, Payload: StatusEffectResult{ResultOutcome: successfulResultOutcome(), Result: StatusResult{Applied: true, Removed: remove, PreviousStacks: beforeStacks, CurrentStacks: currentStacks, RemovedStacks: max(0, beforeStacks-currentStacks), DueTick: instance.dueTick, PreviousDueTick: beforeDue, Status: command.Status, Created: created}}}, nil
 }
 
 func (host *MemoryHost) statusPolicyFailureLocked() EffectResult {

@@ -1,15 +1,24 @@
 package skillcompose
 
-import "github.com/tjbdwanghaibo/cube-skill/skillv2"
+import "github.com/tjbdwanghaibo/cube-skill/v2/skillv2"
 
 type SkillProfile struct {
 	SkillID, GameplayDigest   string
+	Authority                 skillv2.AuthorityIdentity
+	Sources                   []SourceIdentity
+	FeatureOrigins            []FeatureOrigin
 	ActivationMode, InputKind string
 	Features                  []FeatureKey
 	Operations                []string
 	Selections                []SelectionFact
 	Metrics                   Metrics
 	PresentationDigest        string
+}
+
+type FeatureOrigin struct {
+	Feature   FeatureKey
+	SourceID  string
+	Transform TransformKind
 }
 
 type SelectionFact struct {

@@ -87,8 +87,6 @@ func (runtime *Runtime) executeAbilityStateMutation(cast *castInstance, operatio
 func (runtime *Runtime) RegisterAbility(registration AbilityRegistration) error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
-	runtime.beginStateMutationLocked()
-	defer runtime.commitStateMutationsLocked()
 	if registration.Owner == 0 || registration.Handle == 0 || registration.Slot < 0 || registration.Program == nil || runtime.host == nil || registration.Program.compilerSemanticsRevision != runtime.options.SupportedCompilerSemanticsRevision || !authorityMatches(registration.Program.authority, runtime.host.AuthorityIdentity()) {
 		return ErrCastInputInvalid
 	}
@@ -98,6 +96,9 @@ func (runtime *Runtime) RegisterAbility(registration AbilityRegistration) error 
 	}
 	if _, exists := runtime.abilities[abilityKey{owner: registration.Owner, handle: registration.Handle}]; exists {
 		return ErrCastInputInvalid
+	}
+	if len(runtime.abilities) >= runtime.options.MaxAbilities {
+		return ErrRuntimeCapacityExceeded
 	}
 	if registration.Program.cast.mode == castModeAmmo {
 		if registration.AmmoMax != registration.Program.cast.maxStock || registration.AmmoStock < 0 || registration.AmmoStock > registration.AmmoMax {
@@ -112,6 +113,8 @@ func (runtime *Runtime) RegisterAbility(registration AbilityRegistration) error 
 			return ErrCastInputInvalid
 		}
 	}
+	runtime.beginStateMutationLocked()
+	defer runtime.commitStateMutationsLocked()
 	state := &abilityState{owner: registration.Owner, handle: registration.Handle, slot: registration.Slot, tags: normalizeGameplayTagHandles(tags), program: registration.Program, ammoStock: registration.AmmoStock, ammoMax: registration.AmmoMax, overlays: make(map[uint64]Tick)}
 	runtime.abilities[abilityKey{owner: state.owner, handle: state.handle}] = state
 	runtime.abilityByProgram[skillStateKey{Caster: state.owner, Skill: state.program.id}] = state.handle
@@ -151,6 +154,9 @@ func (runtime *Runtime) ensureAbilityLocked(owner EntityID, program *Program) (*
 			return nil, ErrCastInputRejected
 		}
 		return state, nil
+	}
+	if len(runtime.abilities) >= runtime.options.MaxAbilities {
+		return nil, ErrRuntimeCapacityExceeded
 	}
 	runtime.nextAbilityHandle++
 	state := &abilityState{owner: owner, handle: runtime.nextAbilityHandle, slot: runtime.nextAbilitySlot(owner), tags: selectableProgramAbilityTags(program), program: program, overlays: make(map[uint64]Tick)}
@@ -208,6 +214,7 @@ func (runtime *Runtime) markAbilityCastFinished(cast *castInstance) {
 		return
 	}
 	cast.abilityFinished = true
+	runtime.trackCompletedCastLocked(cast)
 	if state := runtime.abilities[abilityKey{owner: cast.caster, handle: cast.ability}]; state != nil {
 		if state.castActive > 0 {
 			state.castActive--
@@ -427,7 +434,7 @@ func (runtime *Runtime) emitAbilityChange(state *abilityState, property, operati
 	event := RuntimeEvent{Tick: runtime.currentTick, Kind: kind, Entity: state.owner, Context: cloneEventContext(context), Ability: &AbilityChangeEvent{Owner: state.owner, Ability: state.handle, Property: property, Before: before, After: after, Operation: operation}}
 	runtime.appendRuntimeEvent(event)
 	if cast := runtime.casts[context.CastID]; cast != nil {
-		cast.events = append(cast.events, cloneRuntimeEvent(event))
+		runtime.appendCastEvent(cast, event)
 	}
 }
 

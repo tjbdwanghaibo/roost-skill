@@ -64,7 +64,10 @@ cast commit 后产生。因此客户端永远不会先看到一个被权威层�
 
 客户端 ACK 的对象是网络 Packet.Sequence：
 
-1. 服务端调用 `History.Acknowledge(observer, stream, sequence)`。
+1. 服务端调用 `Coordinator.Acknowledge(observer, stream, epoch, sequence)`。Coordinator
+   在 observer/key 生命周期锁内先验证 epoch/sequence，再持久删除对应 Outbox，最后提交
+   History ACK；Outbox 删除失败时 History 保持不变，History WAL 失败时立即从 History
+   重建 Outbox。业务层不要分别调用这两个底层操作。
 2. 客户端重连时提交 AfterSequence 与 SchemaVersion。
 3. `History.Recover` 返回连续 Packets 时，按顺序重放。
 4. 无法 replay 时，Recover 自动调用 SnapshotProvider 产生并 Append Full，Reason 表示原因：
@@ -79,19 +82,21 @@ cast commit 后产生。因此客户端永远不会先看到一个被权威层�
 
 这是三个仓库的原子设计变更，但版本发布必须按依赖方向进行：
 
-1. 合并并发布 `cube-core`（包含 `syncstream`）。
-2. `cube-skill` 的 `go.mod` 从本地 replace 改为已发布的 core 版本，发布
-   `cube-skill`。
-3. `cube-kit` 升级 core 版本，发布 transport adapter。
+1. 发布 `cube-core v1.3.0`（包含 `syncstream`）。
+2. 发布 Go 模块 `github.com/tjbdwanghaibo/cube-skill/v2` 的 `cube-skill v2.0.0`。
+3. 发布/确认 `cube-kit v1.1.0` transport adapter。
 4. 具体游戏升级 cube-skill/cube-kit，替换旧导入路径：
 
 ```text
 github.com/tjbdwanghaibo/cube/game/gameplay/skillv2
-=> github.com/tjbdwanghaibo/cube-skill/skillv2
+=> github.com/tjbdwanghaibo/cube-skill/v2/skillv2
 
 github.com/tjbdwanghaibo/cube/game/gameplay/skillcompose
-=> github.com/tjbdwanghaibo/cube-skill/skillcompose
+=> github.com/tjbdwanghaibo/cube-skill/v2/skillcompose
 ```
+
+该版本是持久化和 API 的破坏性升级，不能直接滚动复用 v1 outbox/checkpoint。停服排空、
+首次启动和回滚流程见 [v2 破坏性升级手册](breaking-upgrade-v2.md)。
 
 本地多仓开发使用 `go work`，不要把临时绝对路径写进代码。
 

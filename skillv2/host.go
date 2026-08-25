@@ -14,6 +14,12 @@ type Host interface {
 	Events(after EventCursor) []RuntimeEvent
 }
 
+// HostEventCompactor is an optional single-consumer optimization. A Host must
+// implement it only when the Runtime is the exclusive consumer of Events.
+type HostEventCompactor interface {
+	CompactEventsThrough(EventCursor)
+}
+
 // InputPositionResolver supplies authoritative blocked-position facts without
 // moving deterministic range and path arithmetic out of the Runtime.
 type InputPositionResolver interface {

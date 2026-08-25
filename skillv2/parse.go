@@ -10,17 +10,71 @@ import (
 
 const SchemaV2 = "cube.skill/v2"
 
-var errEffectResultBranchesRequired = errors.New("effect result requires success or failure")
+var (
+	errEffectResultBranchesRequired = errors.New("effect result requires success or failure")
+	ErrParseLimitExceeded           = errors.New("skillv2: JSON input exceeds configured limits")
+)
+
+// ParseLimits bounds work and memory before semantic decoding starts. The
+// defaults are intentionally generous for authored skills while still making
+// untrusted/generated JSON safe to accept at a service boundary.
+type ParseLimits struct {
+	MaxBytes            int
+	MaxDepth            int
+	MaxTokens           int
+	MaxStringBytes      int
+	MaxContainerEntries int
+}
+
+func DefaultParseLimits() ParseLimits {
+	return ParseLimits{MaxBytes: 1 << 20, MaxDepth: 64, MaxTokens: 100000, MaxStringBytes: 64 << 10, MaxContainerEntries: 4096}
+}
+
+func normalizeParseLimits(limits ParseLimits) ParseLimits {
+	defaults := DefaultParseLimits()
+	if limits.MaxBytes <= 0 {
+		limits.MaxBytes = defaults.MaxBytes
+	}
+	if limits.MaxDepth <= 0 {
+		limits.MaxDepth = defaults.MaxDepth
+	}
+	if limits.MaxTokens <= 0 {
+		limits.MaxTokens = defaults.MaxTokens
+	}
+	if limits.MaxStringBytes <= 0 {
+		limits.MaxStringBytes = defaults.MaxStringBytes
+	}
+	if limits.MaxContainerEntries <= 0 {
+		limits.MaxContainerEntries = defaults.MaxContainerEntries
+	}
+	return limits
+}
 
 func Parse(data []byte) (*Definition, error) {
-	if err := rejectDuplicateKeys(data); err != nil {
+	return ParseWithLimits(data, DefaultParseLimits())
+}
+
+func ParseWithLimits(data []byte, limits ParseLimits) (*Definition, error) {
+	limits = normalizeParseLimits(limits)
+	if len(data) > limits.MaxBytes {
+		return nil, fmt.Errorf("%w: bytes %d > %d", ErrParseLimitExceeded, len(data), limits.MaxBytes)
+	}
+	if err := rejectDuplicateKeysWithLimits(data, limits); err != nil {
 		return nil, err
 	}
 	return parseDefinition(data)
 }
 
 func ParseGenerated(data []byte) (GeneratedResult, error) {
-	if err := rejectDuplicateKeys(data); err != nil {
+	return ParseGeneratedWithLimits(data, DefaultParseLimits())
+}
+
+func ParseGeneratedWithLimits(data []byte, limits ParseLimits) (GeneratedResult, error) {
+	limits = normalizeParseLimits(limits)
+	if len(data) > limits.MaxBytes {
+		return GeneratedResult{}, fmt.Errorf("%w: bytes %d > %d", ErrParseLimitExceeded, len(data), limits.MaxBytes)
+	}
+	if err := rejectDuplicateKeysWithLimits(data, limits); err != nil {
 		return GeneratedResult{}, err
 	}
 	var root map[string]json.RawMessage

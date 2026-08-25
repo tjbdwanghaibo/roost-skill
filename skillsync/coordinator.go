@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/cube-core/syncstream"
-	"github.com/tjbdwanghaibo/cube-skill/skillv2"
+	"github.com/tjbdwanghaibo/cube-skill/v2/skillv2"
 )
 
 var (
@@ -20,6 +20,7 @@ var (
 	ErrManifestMissing    = errors.New("skillsync: presentation manifest is missing")
 	ErrTopicUnsupported   = errors.New("skillsync: topic is unsupported")
 	ErrObserverClosed     = errors.New("skillsync: observer is closed")
+	ErrCoordinatorInvalid = errors.New("skillsync: coordinator is not initialized")
 )
 
 type PacketPublisher interface{ Publish(syncstream.Packet) error }
@@ -373,10 +374,34 @@ func (coordinator *Coordinator) appendPending(packet syncstream.Packet) (syncstr
 }
 
 func (coordinator *Coordinator) Acknowledge(observer syncstream.Observer, stream syncstream.Stream, epoch, sequence uint64) error {
-	if err := coordinator.history.AcknowledgeEpoch(observer, stream, epoch, sequence); err != nil {
+	if coordinator == nil || coordinator.history == nil || coordinator.outbox == nil {
+		return ErrCoordinatorInvalid
+	}
+	release, err := coordinator.acquireView(observerKey{observer: observer, key: stream.Key})
+	if err != nil {
 		return err
 	}
-	return coordinator.outbox.Acknowledge(observer, stream, epoch, sequence)
+	defer release()
+	// Validate before deleting the derived copy. latest can only advance while
+	// this view is held, so a valid sequence cannot become invalid here.
+	if epoch != coordinator.history.Epoch() {
+		return syncstream.ErrAckEpochMismatch
+	}
+	if sequence > coordinator.history.Status(observer, stream).LatestSequence {
+		return syncstream.ErrAckAhead
+	}
+	// Delete the derived outbox copy first. If History ACK then fails, startup
+	// reconciliation can recreate it. The opposite order can permanently orphan
+	// a stale outbox record after a crash or store failure.
+	if err := coordinator.outbox.Acknowledge(observer, stream, epoch, sequence); err != nil {
+		return errors.Join(err, coordinator.outbox.Reconcile(coordinator.history.Export()))
+	}
+	if err := coordinator.history.AcknowledgeEpoch(observer, stream, epoch, sequence); err != nil {
+		// Repair immediately as well as retaining History as the crash-recovery
+		// source. Joining both failures preserves the primary WAL error.
+		return errors.Join(err, coordinator.outbox.Reconcile(coordinator.history.Export()))
+	}
+	return nil
 }
 
 type snapshotProviderFunc func(syncstream.ResyncRequest) (syncstream.Packet, error)
@@ -452,13 +477,20 @@ func (coordinator *Coordinator) publishObserver(observer syncstream.Observer) er
 	return err
 }
 func (coordinator *Coordinator) RetryPending(now time.Time) error {
-	if err := coordinator.outbox.Reconcile(coordinator.history.Export()); err != nil {
-		return err
-	}
 	before := coordinator.outbox.Metrics()
 	err := coordinator.outbox.PublishDue(coordinator.publisher, now, nil, nil)
 	coordinator.capturePublishMetrics(before, coordinator.outbox.Metrics())
 	return err
+}
+
+// ReconcilePending explicitly repairs the history/outbox crash window. Normal
+// retries avoid an O(history) rescan: construction reconciles once and each
+// live append persists directly to the outbox.
+func (coordinator *Coordinator) ReconcilePending() error {
+	if coordinator == nil || coordinator.outbox == nil || coordinator.history == nil {
+		return ErrCoordinatorInvalid
+	}
+	return coordinator.outbox.Reconcile(coordinator.history.Export())
 }
 func (coordinator *Coordinator) capturePublishMetrics(before, after OutboxMetrics) {
 	coordinator.counters.published.Add(after.PublishSuccesses - before.PublishSuccesses)
@@ -503,10 +535,12 @@ func (coordinator *Coordinator) CloseObserver(observer syncstream.Observer) erro
 		}
 		coordinator.mutex.Unlock()
 	}()
-	if _, err := coordinator.history.DeleteObserver(observer); err != nil {
-		return err
-	}
 	if err := coordinator.outbox.DiscardObserver(observer); err != nil {
+		return errors.Join(err, coordinator.outbox.Reconcile(coordinator.history.Export()))
+	}
+	// History remains the repair source until every outbox record is durably
+	// removed. A crash after this point is safe: retained History can reconcile.
+	if _, err := coordinator.history.DeleteObserver(observer); err != nil {
 		return err
 	}
 	coordinator.mutex.Lock()

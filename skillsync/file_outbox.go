@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,6 +17,8 @@ import (
 )
 
 const fileOutboxVersion uint32 = 1
+const fileOutboxMaxRecords = 1_000_000
+const fileOutboxMaxRecordBytes int64 = 64 << 20
 
 type fileOutboxEnvelope struct {
 	Version  uint32       `json:"version"`
@@ -23,16 +26,39 @@ type fileOutboxEnvelope struct {
 	Checksum string       `json:"checksum"`
 }
 
-// FileOutboxStore persists one immutable file per network packet. Atomic rename
-// makes Put crash-safe and idempotent without a database dependency.
+// FileOutboxStore persists one atomically replaceable file per network packet.
+// This makes packet insertion and retry-metadata updates crash-safe without a
+// database dependency.
 type FileOutboxStore struct {
-	mutex     sync.Mutex
-	directory string
+	mutex          sync.Mutex
+	directory      string
+	maxRecords     int
+	maxRecordBytes int64
+	recordCount    int
+}
+
+type FileOutboxOptions struct {
+	MaxRecords     int
+	MaxRecordBytes int64
 }
 
 func NewFileOutboxStore(directory string) (*FileOutboxStore, error) {
+	return NewFileOutboxStoreWithOptions(directory, FileOutboxOptions{})
+}
+
+func NewFileOutboxStoreWithOptions(directory string, options FileOutboxOptions) (*FileOutboxStore, error) {
 	if directory == "" {
 		return nil, ErrOutboxStoreRequired
+	}
+	if options.MaxRecords <= 0 {
+		options.MaxRecords = 100000
+	} else if options.MaxRecords > fileOutboxMaxRecords {
+		options.MaxRecords = fileOutboxMaxRecords
+	}
+	if options.MaxRecordBytes <= 0 {
+		options.MaxRecordBytes = 16 << 20
+	} else if options.MaxRecordBytes > fileOutboxMaxRecordBytes {
+		options.MaxRecordBytes = fileOutboxMaxRecordBytes
 	}
 	absolute, err := filepath.Abs(directory)
 	if err != nil {
@@ -41,7 +67,23 @@ func NewFileOutboxStore(directory string) (*FileOutboxStore, error) {
 	if err := os.MkdirAll(absolute, 0o700); err != nil {
 		return nil, err
 	}
-	return &FileOutboxStore{directory: absolute}, nil
+	entries, err := os.ReadDir(absolute)
+	if err != nil {
+		return nil, err
+	}
+	count := 0
+	for _, entry := range entries {
+		if entry.Type()&os.ModeSymlink != 0 && filepath.Ext(entry.Name()) == ".packet" {
+			return nil, ErrRecordInvalid
+		}
+		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".packet" {
+			count++
+		}
+	}
+	if count > options.MaxRecords {
+		return nil, ErrOutboxStoreLimit
+	}
+	return &FileOutboxStore{directory: absolute, maxRecords: options.MaxRecords, maxRecordBytes: options.MaxRecordBytes, recordCount: count}, nil
 }
 
 func (store *FileOutboxStore) Load() ([]syncstream.Packet, error) {
@@ -68,7 +110,20 @@ func (store *FileOutboxStore) LoadRecords() ([]OutboxRecord, error) {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".packet" {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(store.directory, entry.Name()))
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil, ErrRecordInvalid
+		}
+		if len(records) >= store.maxRecords {
+			return nil, ErrOutboxStoreLimit
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil, err
+		}
+		if info.Size() < 0 || info.Size() > store.maxRecordBytes {
+			return nil, ErrOutboxStoreLimit
+		}
+		data, err := readOutboxFile(filepath.Join(store.directory, entry.Name()), store.maxRecordBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -82,14 +137,21 @@ func (store *FileOutboxStore) LoadRecords() ([]OutboxRecord, error) {
 		records = append(records, record)
 	}
 	sort.Slice(records, func(i, j int) bool {
+		if records[i].Packet.Observer != records[j].Packet.Observer {
+			return observerLess(records[i].Packet.Observer, records[j].Packet.Observer)
+		}
 		if records[i].Packet.Stream.Topic != records[j].Packet.Stream.Topic {
 			return records[i].Packet.Stream.Topic < records[j].Packet.Stream.Topic
 		}
 		if records[i].Packet.Stream.Key != records[j].Packet.Stream.Key {
 			return records[i].Packet.Stream.Key < records[j].Packet.Stream.Key
 		}
+		if records[i].Packet.Epoch != records[j].Packet.Epoch {
+			return records[i].Packet.Epoch < records[j].Packet.Epoch
+		}
 		return records[i].Packet.Sequence < records[j].Packet.Sequence
 	})
+	store.recordCount = len(records)
 	return records, nil
 }
 
@@ -110,14 +172,23 @@ func (store *FileOutboxStore) PutRecord(record OutboxRecord) error {
 	if err != nil {
 		return err
 	}
+	if int64(len(data)) > store.maxRecordBytes {
+		return ErrOutboxStoreLimit
+	}
 	store.mutex.Lock()
 	defer store.mutex.Unlock()
 	packet := record.Packet
+	if packet.Stream.Topic == "" || packet.Epoch == 0 || packet.Sequence == 0 {
+		return ErrRecordInvalid
+	}
 	target := filepath.Join(store.directory, outboxFilename(packet.Observer, packet.Stream, packet.Epoch, packet.Sequence))
-	if _, err := os.Stat(target); err == nil {
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+	_, statErr := os.Stat(target)
+	exists := statErr == nil
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return statErr
+	}
+	if !exists && store.recordCount >= store.maxRecords {
+		return ErrOutboxStoreLimit
 	}
 	temporary, err := os.CreateTemp(store.directory, "outbox-*.tmp")
 	if err != nil {
@@ -145,45 +216,30 @@ func (store *FileOutboxStore) PutRecord(record OutboxRecord) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(name, target); err != nil {
+	if err := replaceFile(name, target); err != nil {
 		return err
 	}
 	remove = false
-	return nil
+	if !exists {
+		store.recordCount++
+	}
+	return syncDirectory(store.directory)
 }
 
 func decodeFileOutboxRecord(data []byte) (OutboxRecord, error) {
-	var shape map[string]json.RawMessage
-	if err := json.Unmarshal(data, &shape); err != nil {
+	var envelope fileOutboxEnvelope
+	if err := decodeStrict(data, &envelope); err != nil || envelope.Version != fileOutboxVersion {
+		return OutboxRecord{}, ErrRecordInvalid
+	}
+	recordData, err := json.Marshal(envelope.Record)
+	if err != nil {
 		return OutboxRecord{}, err
 	}
-	if _, ok := shape["version"]; ok {
-		var envelope fileOutboxEnvelope
-		if err := decodeStrict(data, &envelope); err != nil || envelope.Version != fileOutboxVersion {
-			return OutboxRecord{}, ErrRecordInvalid
-		}
-		recordData, err := json.Marshal(envelope.Record)
-		if err != nil {
-			return OutboxRecord{}, err
-		}
-		digest := sha256.Sum256(recordData)
-		if !bytes.Equal([]byte(envelope.Checksum), []byte(hex.EncodeToString(digest[:]))) {
-			return OutboxRecord{}, ErrRecordInvalid
-		}
-		return envelope.Record, nil
+	digest := sha256.Sum256(recordData)
+	if !bytes.Equal([]byte(envelope.Checksum), []byte(hex.EncodeToString(digest[:]))) {
+		return OutboxRecord{}, ErrRecordInvalid
 	}
-	if _, ok := shape["packet"]; ok { // pre-envelope record format
-		var record OutboxRecord
-		if err := decodeStrict(data, &record); err != nil {
-			return OutboxRecord{}, err
-		}
-		return record, nil
-	}
-	var packet syncstream.Packet // original packet-only format
-	if err := decodeStrict(data, &packet); err != nil {
-		return OutboxRecord{}, err
-	}
-	return OutboxRecord{Packet: packet, CreatedAt: time.Now()}, nil
+	return envelope.Record, nil
 }
 
 func (store *FileOutboxStore) Delete(observer syncstream.Observer, stream syncstream.Stream, epoch, sequence uint64) error {
@@ -193,7 +249,29 @@ func (store *FileOutboxStore) Delete(observer syncstream.Observer, stream syncst
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if store.recordCount > 0 {
+		store.recordCount--
+	}
+	return syncDirectory(store.directory)
+}
+
+func readOutboxFile(path string, maximum int64) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maximum+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maximum {
+		return nil, ErrOutboxStoreLimit
+	}
+	return data, nil
 }
 
 func outboxFilename(observer syncstream.Observer, stream syncstream.Stream, epoch, sequence uint64) string {

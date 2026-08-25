@@ -142,6 +142,11 @@ type RuntimeStateSnapshot struct {
 
 func (runtime *Runtime) appendRuntimeEvent(event RuntimeEvent) {
 	runtime.runtimeEvents = append(runtime.runtimeEvents, cloneRuntimeEvent(event))
+	if overflow := len(runtime.runtimeEvents) - runtime.options.RuntimeEventLimit; overflow > 0 {
+		copy(runtime.runtimeEvents, runtime.runtimeEvents[overflow:])
+		runtime.runtimeEvents = runtime.runtimeEvents[:runtime.options.RuntimeEventLimit]
+		runtime.runtimeEventDropped += uint64(overflow)
+	}
 	runtime.recordStateEvent(event)
 }
 
@@ -199,7 +204,8 @@ func (runtime *Runtime) stateSnapshotLocked() RuntimeStateSnapshot {
 	if runtime.host != nil {
 		revision = runtime.host.CurrentRevision()
 	}
-	snapshot := RuntimeStateSnapshot{Tick: runtime.currentTick, WorldRevision: revision, LatestStateEventSequence: runtime.stateEventSequence, LatestStateMutationSequence: runtime.stateMutationSequence, LatestPresentationSequence: runtime.presentationSequence}
+	snapshot := RuntimeStateSnapshot{Tick: runtime.currentTick, WorldRevision: revision, LatestStateEventSequence: runtime.stateEventSequence, LatestStateMutationSequence: runtime.stateMutationSequence, LatestPresentationSequence: runtime.presentationSequence,
+		Casts: make([]CastStateSnapshot, 0, len(runtime.casts)), Cooldowns: make([]CooldownStateSnapshot, 0, len(runtime.cooldowns)), SkillResources: make([]SkillResourceSnapshot, 0, len(runtime.skillStates)), Abilities: make([]AbilityStateSnapshot, 0, len(runtime.abilities)), Processes: make([]ProcessStateSnapshot, 0, len(runtime.processes)), ActivePolicies: make([]ActivePolicySnapshot, 0, len(runtime.activePolicies))}
 	castIDs := make([]int, 0, len(runtime.casts))
 	for id := range runtime.casts {
 		castIDs = append(castIDs, int(id))

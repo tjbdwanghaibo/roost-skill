@@ -29,15 +29,29 @@ type RuntimeOptions struct {
 	MaxOwnedProcessesPerTemplate       int
 	TraceSink                          TraceSink
 	TraceLimits                        TraceLimits
-	// TraceLimit is retained for compatibility. New callers should use
-	// TraceLimits.MaxBuffer.
-	TraceLimit int
 	// PresentationLimit bounds renderer-facing events retained for polling.
 	PresentationLimit int
 	// StateEventLimit bounds authoritative change events retained for sync.
 	StateEventLimit int
 	// StateMutationLimit bounds canonical, client-applicable state mutations.
 	StateMutationLimit int
+	// RuntimeEventLimit bounds diagnostic events retained by RuntimeEvents.
+	RuntimeEventLimit int
+	// CompletedCastLimit bounds inspectable terminal casts. Active or still
+	// referenced casts are never evicted.
+	CompletedCastLimit int
+	// RootEventLimit bounds once-per-root accounting after inactive roots have
+	// been reclaimed.
+	RootEventLimit int
+	// CheckpointMaxBytes and CheckpointMaxRecords bound recovery input before
+	// it can allocate unbounded object graphs.
+	CheckpointMaxBytes   int
+	CheckpointMaxRecords int
+	MaxActiveCasts       int
+	MaxAbilities         int
+	MaxProcLedgerEntries int
+	// CastEventLimit bounds per-cast diagnostic history returned by InspectCast.
+	CastEventLimit int
 }
 
 type CastInput struct {
@@ -87,6 +101,7 @@ type CastSnapshot struct {
 	VisibleRevision WorldRevision
 	Failure         string
 	Events          []RuntimeEvent
+	EventsDropped   uint64
 	WindowStage     CastWindowStage
 	Committed       bool
 	ElapsedTicks    Tick
@@ -110,6 +125,7 @@ type castInstance struct {
 	visibleRevision    WorldRevision
 	failure            string
 	events             []RuntimeEvent
+	eventsDropped      uint64
 	randomKey          [32]byte
 	randomInvocations  map[RandomSiteIndex]uint64
 	eventContext       EventContext
@@ -160,6 +176,7 @@ type Runtime struct {
 	host                    Host
 	options                 RuntimeOptions
 	casts                   map[CastID]*castInstance
+	activeCastCount         int
 	nextCastID              CastID
 	eventCursor             EventCursor
 	currentTick             Tick
@@ -179,6 +196,9 @@ type Runtime struct {
 	passiveCountTick        Tick
 	passiveCount            int
 	runtimeEvents           []RuntimeEvent
+	runtimeEventDropped     uint64
+	completedCastOrder      []CastID
+	rootEventOrder          []EventID
 	abilities               map[abilityKey]*abilityState
 	abilityByProgram        map[skillStateKey]AbilityHandle
 	nextAbilityHandle       AbilityHandle
@@ -228,6 +248,37 @@ func NewRuntime(host Host, options RuntimeOptions) *Runtime {
 	if options.StateMutationLimit <= 0 {
 		options.StateMutationLimit = 2048
 	}
+	if options.RuntimeEventLimit <= 0 {
+		options.RuntimeEventLimit = 4096
+	}
+	if options.CompletedCastLimit <= 0 {
+		options.CompletedCastLimit = 2048
+	}
+	if options.RootEventLimit <= 0 {
+		options.RootEventLimit = 8192
+	}
+	if options.CheckpointMaxBytes <= 0 {
+		options.CheckpointMaxBytes = 16 << 20
+	} else if options.CheckpointMaxBytes > RuntimeCheckpointMaxBytes {
+		options.CheckpointMaxBytes = RuntimeCheckpointMaxBytes
+	}
+	if options.CheckpointMaxRecords <= 0 {
+		options.CheckpointMaxRecords = 200000
+	} else if options.CheckpointMaxRecords > RuntimeCheckpointMaxRecords {
+		options.CheckpointMaxRecords = RuntimeCheckpointMaxRecords
+	}
+	if options.MaxActiveCasts <= 0 {
+		options.MaxActiveCasts = 4096
+	}
+	if options.MaxAbilities <= 0 {
+		options.MaxAbilities = 10000
+	}
+	if options.MaxProcLedgerEntries <= 0 {
+		options.MaxProcLedgerEntries = 262144
+	}
+	if options.CastEventLimit <= 0 {
+		options.CastEventLimit = 256
+	}
 	runtime := &Runtime{
 		host: host, options: options,
 		casts: make(map[CastID]*castInstance), scheduler: newScheduler(),
@@ -243,6 +294,9 @@ func NewRuntime(host Host, options RuntimeOptions) *Runtime {
 				runtime.eventCursor = event.Cursor
 			}
 		}
+		if compactor, ok := host.(HostEventCompactor); ok && runtime.eventCursor != 0 {
+			compactor.CompactEventsThrough(runtime.eventCursor)
+		}
 	}
 	runtime.stateMutationBaseline = runtime.stateSnapshotLocked()
 	runtime.stateMutationReady = true
@@ -256,6 +310,18 @@ func (runtime *Runtime) Activate(program *Program, input CastInput) (CastID, err
 func (runtime *Runtime) Start(program *Program, input CastInput) (CastID, error) {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
+	if program == nil || runtime.host == nil {
+		return 0, ErrProgramInvariant
+	}
+	if runtime.activeCastCount >= runtime.options.MaxActiveCasts {
+		return 0, ErrRuntimeCapacityExceeded
+	}
+	if program.compilerSemanticsRevision != runtime.options.SupportedCompilerSemanticsRevision {
+		return 0, ErrProgramSemanticsMismatch
+	}
+	if !authorityMatches(program.authority, runtime.host.AuthorityIdentity()) {
+		return 0, ErrAuthorityMismatch
+	}
 	runtime.beginStateMutationLocked()
 	defer runtime.commitStateMutationsLocked()
 	return runtime.startLocked(program, input, nil)
@@ -264,6 +330,9 @@ func (runtime *Runtime) Start(program *Program, input CastInput) (CastID, error)
 func (runtime *Runtime) startLocked(program *Program, input CastInput, parentEvent *EventContext) (CastID, error) {
 	if program == nil || runtime.host == nil {
 		return 0, ErrProgramInvariant
+	}
+	if runtime.activeCastCount >= runtime.options.MaxActiveCasts {
+		return 0, ErrRuntimeCapacityExceeded
 	}
 	if program.compilerSemanticsRevision != runtime.options.SupportedCompilerSemanticsRevision {
 		return 0, ErrProgramSemanticsMismatch
@@ -321,6 +390,7 @@ func (runtime *Runtime) startLocked(program *Program, input CastInput, parentEve
 	}
 	runtime.nextCastID = tentativeID
 	runtime.casts[cast.id] = cast
+	runtime.activeCastCount++
 	runtime.recordTrace(TraceEvent{Kind: TraceCastActivated, Tick: runtime.currentTick, CastID: cast.id})
 	runtime.markAbilityCastStarted(cast)
 	if err := runtime.prepareCast(cast); err != nil {
@@ -344,6 +414,12 @@ func (runtime *Runtime) CastCount() int {
 	return len(runtime.casts)
 }
 
+func (runtime *Runtime) ActiveCastCount() int {
+	runtime.mutex.Lock()
+	defer runtime.mutex.Unlock()
+	return runtime.activeCastCount
+}
+
 func (runtime *Runtime) InspectCast(id CastID) (CastSnapshot, bool) {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -354,7 +430,8 @@ func (runtime *Runtime) InspectCast(id CastID) (CastSnapshot, bool) {
 	return CastSnapshot{
 		ID: cast.id, Caster: cast.caster, Status: cast.status, CurrentPhase: cast.currentPhase,
 		VisibleRevision: cast.visibleRevision, Failure: cast.failure, Events: cloneRuntimeEvents(cast.events),
-		WindowStage: cast.windowStage, Committed: cast.committed, ElapsedTicks: runtime.currentTick - cast.startTick,
+		EventsDropped: cast.eventsDropped,
+		WindowStage:   cast.windowStage, Committed: cast.committed, ElapsedTicks: runtime.currentTick - cast.startTick,
 		PulseIndex: cast.pulseIndex, ReleaseReason: cast.releaseReason, Stock: cast.stock, MaxStock: cast.maxStock,
 	}, true
 }

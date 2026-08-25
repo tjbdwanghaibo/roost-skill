@@ -271,7 +271,7 @@ go test -race ./syncstream -count=1
 上线门槛：普通测试、fixture、vet、race 全绿；故障矩阵全绿；指标和告警已接入；History
 持久化恢复演练成功；客户端能够处理 full/reset；不存在 nil visibility 或无限队列配置。
 
-## 11. v1.1.0 生产闭环补充
+## 11. v2.0.0 生产闭环补充
 
 本节覆盖旧章节中基于“定期 Export/Import、发布后等待 Resync”的保守描述。当前正式
 可靠链路如下：
@@ -282,7 +282,8 @@ go test -race ./syncstream -count=1
    原子发布唯一名称的 checkpoint；恢复只组合相同 generation。最新代损坏会阻止启动，
    上一代仅供运维显式恢复，协议不会静默回退并丢失已确认进度。
 3. `Outbox` 在 broker 接受后仍保留 Packet，直到客户端 ACK。`FileOutboxStore` 提供进程
-   重启恢复；`Reconcile(History.Export())` 修复 History 已提交、outbox 尚未写入的窗口。
+   重启恢复；Coordinator 构造时执行一次 crash reconciliation，运维显式修复调用
+   `ReconcilePending`。正常 `RetryPending` 只扫描有界 pending，不重复全量 Export History。
 4. 建议启用 `PruneAcknowledged`，在 ACK durable 后释放历史 Packet；`Pruned` 与容量不足
    导致的 `Dropped` 分开统计。observer 离开调用 `CloseObserver`，定期调用 `SweepIdle`。
 5. 生产 Publisher 设置 `RequireConfirmation=true`、`CompressionThreshold`、
@@ -310,9 +311,12 @@ history, _ := syncstream.NewHistoryWithJournal(syncstream.HistoryOptions{
     PruneAcknowledged: true,
 }, journal)
 
-store, _ := skillsync.NewFileOutboxStore(outboxDir)
+store, _ := skillsync.NewFileOutboxStoreWithOptions(outboxDir, skillsync.FileOutboxOptions{
+    MaxRecords: 100000, MaxRecordBytes: 2 << 20,
+})
 outbox, _ := skillsync.NewOutbox(skillsync.OutboxOptions{
     Store: store, RequireDurable: true,
+    MaxPublishBatch: 512,
 })
 
 publisher, _ := kitsync.NewPublisherWithOptions(bus, kitsync.PublisherOptions{
@@ -348,7 +352,8 @@ $env:CUBE_SYNC_SOAK_DURATION='30m'
 go test ./... -run TestProtocolSoak -count=1 -timeout 35m
 ```
 
-发布顺序为 `cube-core v1.1.0 → cube-skill → cube-kit → 业务服务/客户端`。生产模块只依赖
+发布顺序为 `cube-core v1.3.0 → cube-skill v2.0.0 → cube-kit v1.1.0 → 业务服务/客户端`。
+`cube-skill` 的模块路径是 `github.com/tjbdwanghaibo/cube-skill/v2`。生产模块只依赖
 语义版本；相对 `replace` 仅存在于 `integration/sync-e2e` 测试模块。正式发布 tag 前应先用
 临时 workspace 执行三仓全量测试，然后在无 workspace 环境验证已发布版本可解析。
 
@@ -384,8 +389,14 @@ outbox, err := skillsync.NewOutbox(skillsync.OutboxOptions{
     MaxPendingBytes:     256 << 20,
     MaxPendingPerStream: 4_096,
     MaxPendingAge:       24 * time.Hour,
+    MaxPublishBatch:     512,
 })
 ```
 
 容量值必须由“最大断连时长 × 峰值每秒包数 × 平均/高分位 payload”推导，并留出恢复重放
 余量；示例只是默认安全阀，不是所有部署的容量规划答案。
+
+v2 不读取 v1 checkpoint、旧 packet-only outbox 或 v1 composition contract，也删除了旧的
+Trace/Process/Status 兼容 API。生产升级必须按
+[v2 破坏性升级手册](breaking-upgrade-v2.md) 排空并更换模块导入路径，不能把网络 schema 的
+双版本窗口误用于本地持久化格式。

@@ -133,7 +133,7 @@ func hasDamageResultData(result DamageResult) bool {
 }
 
 func hasStatusResultData(result StatusResult) bool {
-	return result.Applied || result.Removed || result.Immune || result.Stacks != 0 || result.PreviousStacks != 0 ||
+	return result.Applied || result.Removed || result.Immune || result.PreviousStacks != 0 ||
 		result.CurrentStacks != 0 || result.RemovedStacks != 0 || result.DueTick != 0 || result.PreviousDueTick != 0 ||
 		result.Status != (StatusInstanceRef{}) || result.Created != (StatusInstanceRef{})
 }
@@ -347,7 +347,7 @@ func (runtime *Runtime) resolveEffectResult(cast *castInstance, continuations ef
 	if !outcome.Succeeded {
 		event := RuntimeEvent{Tick: runtime.currentTick, Kind: "effect_expected_failure", Entity: cast.caster, Context: runtime.effectEventContext(cast, effectIndex), Result: &EffectResultEvent{EffectIndex: effectIndex, ResultType: string(continuations.result.typ), FailureReason: outcome.FailureReason}}
 		runtime.appendRuntimeEvent(event)
-		cast.events = append(cast.events, cloneRuntimeEvent(event))
+		runtime.appendCastEvent(cast, event)
 	}
 	root, hasRoot := continuations.success, continuations.hasSuccess
 	if !outcome.Succeeded {

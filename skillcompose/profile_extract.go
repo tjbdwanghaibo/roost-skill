@@ -4,7 +4,7 @@ import (
 	"errors"
 	"sort"
 
-	"github.com/tjbdwanghaibo/cube-skill/skillv2"
+	"github.com/tjbdwanghaibo/cube-skill/v2/skillv2"
 )
 
 var ErrProgramRequired = errors.New("skillcompose: compiled program is required")
@@ -14,7 +14,7 @@ func ExtractProfile(program *skillv2.Program) (SkillProfile, error) {
 		return SkillProfile{}, ErrProgramRequired
 	}
 	view := skillv2.Inspect(program)
-	profile := SkillProfile{SkillID: view.ID, GameplayDigest: view.Identity.GameplayDigest, PresentationDigest: view.Identity.PresentationDigest, ActivationMode: view.Cast.Mode, InputKind: view.Input.Kind,
+	profile := SkillProfile{SkillID: view.ID, GameplayDigest: view.Identity.GameplayDigest, Authority: view.Authority, Sources: []SourceIdentity{{SkillID: view.ID, GameplayDigest: view.Identity.GameplayDigest}}, PresentationDigest: view.Identity.PresentationDigest, ActivationMode: view.Cast.Mode, InputKind: view.Input.Kind,
 		Metrics: Metrics{Targets: view.Limits.Targets, Processes: view.Limits.Processes, Mutations: view.Limits.Mutations, EventsPerRoot: view.Limits.EventsPerRoot, RandomSites: view.Limits.RandomSites, LifetimeTicks: view.Limits.LifetimeTicks}}
 	featureSet := map[FeatureKey]struct{}{}
 	for _, operation := range view.Operations {
@@ -27,7 +27,9 @@ func ExtractProfile(program *skillv2.Program) (SkillProfile, error) {
 	}
 	for feature := range featureSet {
 		profile.Features = append(profile.Features, feature)
+		profile.FeatureOrigins = append(profile.FeatureOrigins, FeatureOrigin{Feature: feature, SourceID: profile.SkillID, Transform: TransformIdentity})
 	}
 	sort.Slice(profile.Features, func(i, j int) bool { return profile.Features[i] < profile.Features[j] })
+	sort.Slice(profile.FeatureOrigins, func(i, j int) bool { return profile.FeatureOrigins[i].Feature < profile.FeatureOrigins[j].Feature })
 	return profile, nil
 }

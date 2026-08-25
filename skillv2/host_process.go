@@ -55,21 +55,10 @@ type ProcessNumericSnapshot struct {
 	CollisionForce          int64
 }
 
-type ProcessCommandPayload interface{ isProcessCommandPayload() }
-
-type ProjectileStepCommand struct {
-	Position Position
-	Velocity Direction
-	Target   EntityID
-}
-
-func (ProjectileStepCommand) isProcessCommandPayload() {}
-
 type ProcessStepCommand struct {
 	Meta    ProcessCommandMeta
 	Motion  MotionStep
 	Numeric ProcessNumericSnapshot
-	Payload ProcessCommandPayload
 }
 
 type ProcessStopCommand struct{ Meta ProcessCommandMeta }

@@ -48,10 +48,7 @@ func (runtime *Runtime) recordTrace(event TraceEvent) {
 }
 
 func (runtime *Runtime) traceBufferLimit() int {
-	if runtime.options.TraceLimits.MaxBuffer > 0 {
-		return runtime.options.TraceLimits.MaxBuffer
-	}
-	return runtime.options.TraceLimit
+	return runtime.options.TraceLimits.MaxBuffer
 }
 
 func (runtime *Runtime) InspectTrace() []TraceEvent {

@@ -103,7 +103,6 @@ func (DispelStatusCommand) isEffectCommandPayload() {}
 
 type StatusResult struct {
 	Applied, Removed, Immune bool
-	Stacks                   int // Deprecated compatibility alias for CurrentStacks.
 	PreviousStacks           int
 	CurrentStacks            int
 	RemovedStacks            int

@@ -107,10 +107,17 @@ type MemoryHost struct {
 	temporalSnapshots     map[uint64]temporalSnapshotRecord
 	nextTemporalToken     uint64
 	temporalBlocked       map[Position]Position
+	compactEvents         bool
 }
 
+type MemoryHostOptions struct{ CompactEvents bool }
+
 func NewMemoryHost(authority AuthorityIdentity) *MemoryHost {
-	return &MemoryHost{authority: authority, entities: make(map[EntityID]MemoryEntity), processes: make(map[ProcessID]memoryProcess), states: make(map[memoryStateKey]memoryStateRecord), ownedEntities: make(map[EntityID]OwnedEntityMetadata), ownedTransactions: make(map[OwnedSpawnTransactionID]ownedSpawnTransaction), temporalSnapshots: make(map[uint64]temporalSnapshotRecord), temporalBlocked: make(map[Position]Position), nextEntity: 1}
+	return NewMemoryHostWithOptions(authority, MemoryHostOptions{})
+}
+
+func NewMemoryHostWithOptions(authority AuthorityIdentity, options MemoryHostOptions) *MemoryHost {
+	return &MemoryHost{authority: authority, entities: make(map[EntityID]MemoryEntity), processes: make(map[ProcessID]memoryProcess), states: make(map[memoryStateKey]memoryStateRecord), ownedEntities: make(map[EntityID]OwnedEntityMetadata), ownedTransactions: make(map[OwnedSpawnTransactionID]ownedSpawnTransaction), temporalSnapshots: make(map[uint64]temporalSnapshotRecord), temporalBlocked: make(map[Position]Position), nextEntity: 1, compactEvents: options.CompactEvents}
 }
 
 func (host *MemoryHost) AuthorityIdentity() AuthorityIdentity { return host.authority }
@@ -339,6 +346,30 @@ func (host *MemoryHost) Events(after EventCursor) []RuntimeEvent {
 		}
 	}
 	return cloneRuntimeEvents(host.events[first:])
+}
+
+func (host *MemoryHost) CompactEventsThrough(cursor EventCursor) {
+	host.mutex.Lock()
+	defer host.mutex.Unlock()
+	if !host.compactEvents {
+		return
+	}
+	first := 0
+	for first < len(host.events) && host.events[first].Cursor <= cursor {
+		first++
+	}
+	if first == 0 {
+		return
+	}
+	if first == len(host.events) {
+		host.events = nil
+		return
+	}
+	copy(host.events, host.events[first:])
+	for index := len(host.events) - first; index < len(host.events); index++ {
+		host.events[index] = RuntimeEvent{}
+	}
+	host.events = host.events[:len(host.events)-first]
 }
 
 func (host *MemoryHost) requireRevisionLocked(required WorldRevision) error {

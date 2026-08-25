@@ -20,7 +20,7 @@ func TestTraceIsBoundedAndDoesNotChangeGameplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	withHost := runtimeTestHost(environment)
-	with := NewRuntime(withHost, RuntimeOptions{MatchSeed: fixedTestSeed(31), TraceLimit: 1})
+	with := NewRuntime(withHost, RuntimeOptions{MatchSeed: fixedTestSeed(31), TraceLimits: TraceLimits{MaxBuffer: 1}})
 	if _, err := with.Activate(program, CastInput{Caster: 1, Target: 2}); err != nil {
 		t.Fatal(err)
 	}

@@ -91,6 +91,7 @@ func (runtime *Runtime) commitStateMutationsLocked() {
 	if !runtime.stateMutationDirty {
 		return
 	}
+	runtime.pruneCompletedCastsLocked()
 	runtime.stateMutationDirty = false
 	current := runtime.stateSnapshotLocked()
 	if !runtime.stateMutationReady {
@@ -140,7 +141,7 @@ func diffRuntimeState(before, after RuntimeStateSnapshot) []StateMutation {
 	afterCasts := make(map[CastID]CastStateSnapshot, len(after.Casts))
 	for _, value := range after.Casts {
 		afterCasts[value.ID] = value
-		if previous, ok := beforeCasts[value.ID]; !ok || !reflect.DeepEqual(previous, value) {
+		if previous, ok := beforeCasts[value.ID]; !ok || !castStateEqualIgnoringClock(previous, value) {
 			copyValue := value
 			result = append(result, StateMutation{Kind: StateMutationCastUpsert, CastID: value.ID, Cast: &copyValue})
 		}
@@ -155,23 +156,39 @@ func diffRuntimeState(before, after RuntimeStateSnapshot) []StateMutation {
 		entity  EntityID
 		program string
 	}
-	beforeCooldowns := make(map[skillKey]CooldownStateSnapshot, len(before.Cooldowns))
-	for _, value := range before.Cooldowns {
-		beforeCooldowns[skillKey{value.Caster, value.ProgramID}] = value
-	}
-	afterCooldowns := make(map[skillKey]CooldownStateSnapshot, len(after.Cooldowns))
-	for _, value := range after.Cooldowns {
-		key := skillKey{value.Caster, value.ProgramID}
-		afterCooldowns[key] = value
-		if previous, ok := beforeCooldowns[key]; !ok || previous != value {
+	for left, right := 0, 0; left < len(before.Cooldowns) || right < len(after.Cooldowns); {
+		if left == len(before.Cooldowns) {
+			value := after.Cooldowns[right]
+			copyValue := value
+			result = append(result, StateMutation{Kind: StateMutationCooldownUpsert, Caster: value.Caster, ProgramID: value.ProgramID, Cooldown: &copyValue})
+			right++
+			continue
+		}
+		if right == len(after.Cooldowns) {
+			value := before.Cooldowns[left]
+			result = append(result, StateMutation{Kind: StateMutationCooldownRemove, Caster: value.Caster, ProgramID: value.ProgramID})
+			left++
+			continue
+		}
+		previous, value := before.Cooldowns[left], after.Cooldowns[right]
+		order := compareSkillState(previous.Caster, previous.ProgramID, value.Caster, value.ProgramID)
+		if order < 0 {
+			result = append(result, StateMutation{Kind: StateMutationCooldownRemove, Caster: previous.Caster, ProgramID: previous.ProgramID})
+			left++
+			continue
+		}
+		if order > 0 {
+			copyValue := value
+			result = append(result, StateMutation{Kind: StateMutationCooldownUpsert, Caster: value.Caster, ProgramID: value.ProgramID, Cooldown: &copyValue})
+			right++
+			continue
+		}
+		if !cooldownStateEqualIgnoringClock(previous, value) {
 			copyValue := value
 			result = append(result, StateMutation{Kind: StateMutationCooldownUpsert, Caster: value.Caster, ProgramID: value.ProgramID, Cooldown: &copyValue})
 		}
-	}
-	for key := range beforeCooldowns {
-		if _, ok := afterCooldowns[key]; !ok {
-			result = append(result, StateMutation{Kind: StateMutationCooldownRemove, Caster: key.entity, ProgramID: key.program})
-		}
+		left++
+		right++
 	}
 
 	beforeResources := make(map[skillKey]SkillResourceSnapshot, len(before.SkillResources))
@@ -205,7 +222,7 @@ func diffRuntimeState(before, after RuntimeStateSnapshot) []StateMutation {
 	for _, value := range after.Abilities {
 		key := abilityKeyView{value.Owner, value.Handle}
 		afterAbilities[key] = value
-		if previous, ok := beforeAbilities[key]; !ok || !reflect.DeepEqual(previous, value) {
+		if previous, ok := beforeAbilities[key]; !ok || !abilityStateEqualIgnoringClock(previous, value) {
 			copyValue := cloneAbilityState(value)
 			result = append(result, StateMutation{Kind: StateMutationAbilityUpsert, Owner: value.Owner, AbilityHandle: value.Handle, Ability: &copyValue})
 		}
@@ -276,11 +293,42 @@ func diffRuntimeState(before, after RuntimeStateSnapshot) []StateMutation {
 		}
 	}
 
-	if len(result) == 0 && (before.Tick != after.Tick || before.WorldRevision != after.WorldRevision || before.LatestStateEventSequence != after.LatestStateEventSequence || before.LatestPresentationSequence != after.LatestPresentationSequence) {
+	if before.Tick != after.Tick || before.WorldRevision != after.WorldRevision || before.LatestStateEventSequence != after.LatestStateEventSequence || before.LatestPresentationSequence != after.LatestPresentationSequence {
 		result = append(result, StateMutation{Kind: StateMutationClock})
 	}
 	sort.SliceStable(result, func(i, j int) bool { return mutationSortKey(result[i]) < mutationSortKey(result[j]) })
 	return result
+}
+
+func castStateEqualIgnoringClock(left, right CastStateSnapshot) bool {
+	left.ElapsedTicks, right.ElapsedTicks = 0, 0
+	return reflect.DeepEqual(left, right)
+}
+
+func cooldownStateEqualIgnoringClock(left, right CooldownStateSnapshot) bool {
+	left.Remaining, right.Remaining = 0, 0
+	return left == right
+}
+
+func compareSkillState(leftEntity EntityID, leftProgram string, rightEntity EntityID, rightProgram string) int {
+	if leftEntity < rightEntity {
+		return -1
+	}
+	if leftEntity > rightEntity {
+		return 1
+	}
+	if leftProgram < rightProgram {
+		return -1
+	}
+	if leftProgram > rightProgram {
+		return 1
+	}
+	return 0
+}
+
+func abilityStateEqualIgnoringClock(left, right AbilityStateSnapshot) bool {
+	left.CooldownRemaining, right.CooldownRemaining = 0, 0
+	return reflect.DeepEqual(left, right)
 }
 
 func mutationSortKey(value StateMutation) string {
@@ -368,6 +416,7 @@ func ApplyStateMutation(snapshot *RuntimeStateSnapshot, mutation StateMutation) 
 	snapshot.LatestStateMutationSequence = mutation.Sequence
 	switch mutation.Kind {
 	case StateMutationClock:
+		recomputeClockDerivedState(snapshot)
 	case StateMutationCastUpsert:
 		if mutation.Cast == nil {
 			return ErrStateMutationInvalid
@@ -380,8 +429,10 @@ func ApplyStateMutation(snapshot *RuntimeStateSnapshot, mutation StateMutation) 
 			return ErrStateMutationInvalid
 		}
 		snapshot.Cooldowns = upsertSkillState(snapshot.Cooldowns, *mutation.Cooldown, func(v CooldownStateSnapshot) (EntityID, string) { return v.Caster, v.ProgramID })
+		setAbilityCooldownRemaining(snapshot, mutation.Cooldown.Caster, mutation.Cooldown.ProgramID, mutation.Cooldown.Remaining)
 	case StateMutationCooldownRemove:
 		snapshot.Cooldowns = removeSkillState(snapshot.Cooldowns, mutation.Caster, mutation.ProgramID, func(v CooldownStateSnapshot) (EntityID, string) { return v.Caster, v.ProgramID })
+		setAbilityCooldownRemaining(snapshot, mutation.Caster, mutation.ProgramID, 0)
 	case StateMutationResourceUpsert:
 		if mutation.Resource == nil {
 			return ErrStateMutationInvalid
@@ -425,6 +476,41 @@ func ApplyStateMutation(snapshot *RuntimeStateSnapshot, mutation StateMutation) 
 	}
 	sortRuntimeStateSnapshot(snapshot)
 	return nil
+}
+
+func recomputeClockDerivedState(snapshot *RuntimeStateSnapshot) {
+	for index := range snapshot.Casts {
+		elapsed := snapshot.Tick - snapshot.Casts[index].StartTick
+		if elapsed < 0 {
+			elapsed = 0
+		}
+		snapshot.Casts[index].ElapsedTicks = elapsed
+	}
+	remaining := make(map[skillKeyForApply]Tick, len(snapshot.Cooldowns))
+	for index := range snapshot.Cooldowns {
+		value := snapshot.Cooldowns[index].DueTick - snapshot.Tick
+		if value < 0 {
+			value = 0
+		}
+		snapshot.Cooldowns[index].Remaining = value
+		remaining[skillKeyForApply{snapshot.Cooldowns[index].Caster, snapshot.Cooldowns[index].ProgramID}] = value
+	}
+	for index := range snapshot.Abilities {
+		snapshot.Abilities[index].CooldownRemaining = remaining[skillKeyForApply{snapshot.Abilities[index].Owner, snapshot.Abilities[index].ProgramID}]
+	}
+}
+
+type skillKeyForApply struct {
+	entity  EntityID
+	program string
+}
+
+func setAbilityCooldownRemaining(snapshot *RuntimeStateSnapshot, owner EntityID, program string, remaining Tick) {
+	for index := range snapshot.Abilities {
+		if snapshot.Abilities[index].Owner == owner && snapshot.Abilities[index].ProgramID == program {
+			snapshot.Abilities[index].CooldownRemaining = remaining
+		}
+	}
 }
 
 type orderedID interface{ ~uint64 }

@@ -1,13 +1,19 @@
 package skillv2
 
-import "sort"
+import (
+	"errors"
+	"sort"
+)
+
+var ErrRuntimeCapacityExceeded = errors.New("skillv2: runtime retention capacity exceeded")
 
 func (runtime *Runtime) QueueExternalEvent(event EventContext) error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
-	runtime.beginStateMutationLocked()
-	defer runtime.commitStateMutationsLocked()
-	if event.Tick < runtime.currentTick || event.WorldRevision > runtime.host.CurrentRevision() {
+	if runtime.host == nil {
+		return ErrProgramInvariant
+	}
+	if event.EventID == 0 || event.Tick < runtime.currentTick || event.WorldRevision > runtime.host.CurrentRevision() {
 		return ErrRevisionUnavailable
 	}
 	return runtime.scheduleSystem(event.Tick, &externalEventTask{Event: cloneEventContext(event)})
@@ -19,7 +25,9 @@ func (runtime *Runtime) dispatchEvent(event EventContext) error {
 		root = event.EventID
 		event.RootEventID = root
 	}
-	runtime.rootEventCounts[root]++
+	if err := runtime.trackRootEventLocked(root); err != nil {
+		return err
+	}
 	if runtime.options.PassiveRouter == nil {
 		return nil
 	}
@@ -56,4 +64,10 @@ func (runtime *Runtime) RuntimeEvents() []RuntimeEvent {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
 	return cloneRuntimeEvents(runtime.runtimeEvents)
+}
+
+func (runtime *Runtime) RuntimeEventDropped() uint64 {
+	runtime.mutex.Lock()
+	defer runtime.mutex.Unlock()
+	return runtime.runtimeEventDropped
 }

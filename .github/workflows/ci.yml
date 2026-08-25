@@ -1,0 +1,57 @@
+name: production-gates
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod verify
+      - run: go vet ./...
+      - run: go test ./... -count=1
+      - if: runner.os == 'Linux'
+        run: go test -race ./... -count=1
+      - if: runner.os == 'Linux'
+        run: go test ./skillv2 -run '^$' -fuzz FuzzParseGeneratedNeverPanics -fuzztime 10s
+      - if: runner.os == 'Linux'
+        run: go test ./skillv2 -run '^$' -fuzz FuzzRestoreRuntimeCheckpointNeverPanics -fuzztime 10s
+      - run: go test ./... -run '^$' -bench . -benchmem -count=1
+
+  sync-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: cube-skill
+      - uses: actions/checkout@v4
+        with:
+          repository: tjbdwanghaibo/cube-core
+          ref: v1.3.0
+          path: cube-core
+      - uses: actions/checkout@v4
+        with:
+          repository: tjbdwanghaibo/cube-kit
+          ref: v1.1.0
+          path: cube-kit
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cube-skill/integration/sync-e2e/go.mod
+          cache-dependency-path: |
+            cube-skill/go.sum
+            cube-skill/integration/sync-e2e/go.sum
+      - working-directory: cube-skill/integration/sync-e2e
+        run: go test -race ./... -count=1

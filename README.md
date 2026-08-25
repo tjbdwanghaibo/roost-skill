@@ -1,5 +1,12 @@
 # cube-skill
 
+Current release line: **v2**. This is a breaking production upgrade and uses
+the Go module path `github.com/tjbdwanghaibo/cube-skill/v2`. Read the
+[v2 breaking-upgrade runbook](docs/breaking-upgrade-v2.md) before deployment;
+v1 checkpoint, outbox, and composition-contract files are not accepted.
+
+Production deployment and release gates: [docs/production-readiness.md](docs/production-readiness.md).
+
 `cube-skill` is the reusable skill compiler and authoritative runtime shared by
 Cube applications. It has no dependency on a concrete game server, renderer,
 or transport.

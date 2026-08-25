@@ -268,11 +268,18 @@ func (runtime *Runtime) cancelPhaseTasks(cast *castInstance, phaseToken uint64) 
 func (runtime *Runtime) Advance(tick Tick) error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
-	runtime.beginStateMutationLocked()
-	defer runtime.commitStateMutationsLocked()
 	if tick < runtime.currentTick {
 		return ErrReverseAdvance
 	}
+	if tick == runtime.currentTick {
+		task, taskFound := runtime.scheduler.Peek()
+		ownedDue, ownedFound := runtime.nextOwnedProcessTick()
+		if (!taskFound || task.DueTick > tick) && (!ownedFound || ownedDue > tick) {
+			return nil
+		}
+	}
+	runtime.beginStateMutationLocked()
+	defer runtime.commitStateMutationsLocked()
 	for {
 		task, found := runtime.scheduler.Peek()
 		ownedDue, ownedFound := runtime.nextOwnedProcessTick()
@@ -350,10 +357,13 @@ func (runtime *Runtime) collectHostEvents() {
 		for _, castID := range castIDs {
 			cast := runtime.casts[CastID(castID)]
 			if cast.status == CastRunning || cast.status == CastSuspended {
-				cast.events = append(cast.events, cloneRuntimeEvent(event))
+				runtime.appendCastEvent(cast, event)
 			}
 		}
 		_ = runtime.dispatchEvent(event.Context)
+	}
+	if compactor, ok := runtime.host.(HostEventCompactor); ok && runtime.eventCursor != 0 {
+		compactor.CompactEventsThrough(runtime.eventCursor)
 	}
 }
 
