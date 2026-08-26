@@ -95,6 +95,7 @@ attributes.Observe(func(id combat.AttributeID) {
 - `AttributeModifierCommand` 以保留 BuffID（`AttributeModifierBuffID`）+ `BuffIndependent` 策略应用——每条命令独立计时，与 MemoryHost 的逐条 modifier 实例语义一致；
 - 事件词表与 MemoryHost 相同（`status_applied` / `status_immune` / `status_removed` / `status_dispelled` / `attribute_modifier_applied`），proc 过滤器两边行为一致；
 - 挂进 `HostAdapter.Status` 字段后，`HostAdapter.Apply` 自动把 status 域命令转给桥（同时 `ResourceCommand` 也由 adapter 落到映射属性上，语义与 MemoryHost 相同：spend 原子校验、no-op 不推进 revision）。
+- **实例句柄操作**（`ModifyStatusInstanceCommand`：偷取/转移/复制、层数与时长编辑）同样由桥处理，授权矩阵与操作门控照搬 MemoryHost（SourceOwnership、Dispellable、Copyable/Transferable/Stealable、DurationOperations 白名单、MaximumDurationTicks 钳制）。**实例寻址契约：`StatusInstanceRef` 的 opaque id 就是 `combat.BuffInstanceID`**——宿主在 Select 返回 status 实例时用 `skillv2.NewStatusInstanceID(uint64(instance.Instance))` 发放句柄。护盾类 status 的盾值搬移不在桥内（护盾池在 `Combatant.Shield`，由宿主的 damage/shield 面管理）。
 
 **一处有意的语义差异**：`mul_bp` 修饰在桥/AttributeSet 中按 **基点增量加性叠加**（两个 ×1.2 = +40%，顺序无关、事务回滚可精确逆转），而 MemoryHost 是乘性链（= +44%）。一个游戏只选一种宿主语义并保持一致。
 

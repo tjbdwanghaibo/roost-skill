@@ -11,6 +11,11 @@
 - `combat.BuffContainer` 新增 `BuffIndependent` 叠加策略（同 ID 独立实例独立计时）与 `BuffSpec.MaxDurationTicks`（韧性缩放后的时长上限）；`CombatComponent.RemoveBuff`。
 - `examples/`：三个可运行工程（combat 电池、fireball 全链路、statusbridge + 掷点）。
 - docs：skill-casting-and-combat.md 补 StatusBridge/掷点章节；AI 作者提示词补 concurrent/GCD/窗口表达式语法。
+- `StatusBridge` 支持 `ModifyStatusInstanceCommand`（实例句柄级偷取/转移/复制/层数/时长操作，授权矩阵照搬 MemoryHost）；实例寻址契约：opaque id = `combat.BuffInstanceID`。`combat.BuffContainer` 新增 `SetStacks`/`SetDueTick`/`Adopt`；导出 `skillv2.NewStatusInstanceID`（外部宿主此前无法构造实例句柄）。
+
+### Fixed
+- `RestoreRuntime` 不再经由新建路径压缩宿主事件队列——旧行为在校验之前就把 checkpoint 之后的事件 compact 掉（即使 restore 被拒绝）；`HostEventCompactor` 文档明确保留契约（必须保留最后一次成功 checkpoint 以来的全部事件）。
+- `combat.RestoreBuffContainer` 校验持久化实例（id 唯一、非零、不超过序列号），损坏数据当场报错而不是在远处制造修饰句柄冲突。
 
 ## [1.5.0] - 2026-08
 

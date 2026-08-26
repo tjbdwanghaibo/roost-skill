@@ -102,10 +102,14 @@ func (dao *CombatDao) restoreState(raw []byte) error {
 	if err := json.Unmarshal(raw, &state); err != nil {
 		return fmt.Errorf("combatcomponent: decode combat state: %w", err)
 	}
+	buffs, err := combat.RestoreBuffContainer(state.Buffs)
+	if err != nil {
+		return fmt.Errorf("combatcomponent: restore buffs: %w", err)
+	}
 	dao.combatant = state.Combatant
 	dao.attributes = combat.NewAttributeSet()
 	dao.attributes.RestoreBase(state.Attributes)
-	dao.buffs = combat.RestoreBuffContainer(state.Buffs)
+	dao.buffs = buffs
 	dao.buffs.LinkAttributes(dao.attributes)
 	return nil
 }
@@ -178,10 +182,16 @@ func (component *CombatComponent) undoBuffs() {
 	nest.RecordUndo(dao, FieldBuffs, func() error {
 		// Revoke the grants of whatever is active now, then rebuild the
 		// container; relinking re-grants the restored instances.
+		restored, err := combat.RestoreBuffContainer(before)
+		if err != nil {
+			// before is a State() of a live container, which satisfies the
+			// invariants by construction; failing here means memory corruption.
+			return err
+		}
 		for _, instance := range dao.buffs.Active() {
 			dao.attributes.Revoke(combat.ModifierHandle(instance.Instance))
 		}
-		dao.buffs = combat.RestoreBuffContainer(before)
+		dao.buffs = restored
 		dao.buffs.LinkAttributes(dao.attributes)
 		return nil
 	})
@@ -226,6 +236,34 @@ func (component *CombatComponent) RemoveBuff(id combat.BuffInstanceID) (combat.B
 		component.markDirty(FieldBuffs)
 	}
 	return instance, removed
+}
+
+// SetBuffStacks pins a buff instance's stack count (zero removes it).
+func (component *CombatComponent) SetBuffStacks(id combat.BuffInstanceID, stacks int64) (combat.BuffInstance, bool) {
+	component.undoBuffs()
+	instance, ok := component.dao.buffs.SetStacks(id, stacks)
+	if ok {
+		component.markDirty(FieldBuffs)
+	}
+	return instance, ok
+}
+
+// SetBuffDueTick pins a buff instance's expiry.
+func (component *CombatComponent) SetBuffDueTick(id combat.BuffInstanceID, dueTick int64) (combat.BuffInstance, bool) {
+	component.undoBuffs()
+	instance, ok := component.dao.buffs.SetDueTick(id, dueTick)
+	if ok {
+		component.markDirty(FieldBuffs)
+	}
+	return instance, ok
+}
+
+// AdoptBuff injects a copied or transferred instance under a fresh id.
+func (component *CombatComponent) AdoptBuff(instance combat.BuffInstance) combat.BuffInstanceID {
+	component.undoBuffs()
+	id := component.dao.buffs.Adopt(instance)
+	component.markDirty(FieldBuffs)
+	return id
 }
 
 // DispelBuffs removes up to limit buffs carrying the tag, newest first.

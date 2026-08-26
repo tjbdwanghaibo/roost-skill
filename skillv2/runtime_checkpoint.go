@@ -396,7 +396,14 @@ func RestoreRuntime(host Host, options RuntimeOptions, checkpoint RuntimeCheckpo
 	options.CompletedCastLimit = payload.CompletedCastLimit
 	options.RootEventLimit = payload.RootEventLimit
 	options.MaxProcLedgerEntries = payload.MaxProcLedgerEntries
-	runtime := NewRuntime(host, options)
+	// newRuntimeCore, not NewRuntime: the fresh-runtime path fast-forwards
+	// the event cursor to the host's frontier and compacts everything before
+	// it — which would DELETE the events emitted between the checkpoint and
+	// the crash before restoreCheckpointPayload rewinds the cursor to the
+	// checkpoint value. Those events are exactly what a restored runtime must
+	// replay. HostEventCompactor implementations must therefore retain all
+	// events since the last successful checkpoint.
+	runtime := newRuntimeCore(host, options)
 	if err := runtime.restoreCheckpointPayload(payload, resolver); err != nil {
 		return nil, err
 	}

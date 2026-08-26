@@ -2,6 +2,12 @@ package skillv2
 
 type StatusInstanceID struct{ opaque uint64 }
 
+// NewStatusInstanceID wraps a host-issued opaque instance id. External Host
+// implementations need it to build StatusInstanceRef values for Select
+// results and instance events; the id's meaning is entirely host-defined
+// (combatcomponent uses the combat.BuffInstanceID).
+func NewStatusInstanceID(opaque uint64) StatusInstanceID { return StatusInstanceID{opaque: opaque} }
+
 func (id StatusInstanceID) OpaqueID() uint64 { return id.opaque }
 
 type StatusInstanceRef struct {

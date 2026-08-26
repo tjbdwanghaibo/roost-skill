@@ -164,3 +164,91 @@ func TestHostAdapterResourceCommand(t *testing.T) {
 		t.Fatalf("events = %+v", revision.events)
 	}
 }
+
+func statusInstanceCommand(owner, target skillv2.EntityID, id combat.BuffInstanceID, operation string, value int64) skillv2.ModifyStatusInstanceCommand {
+	return skillv2.ModifyStatusInstanceCommand{
+		Owner: owner, Status: skillv2.StatusInstanceRef{ID: skillv2.NewStatusInstanceID(uint64(id)), Target: target},
+		Operation: operation, Value: value,
+	}
+}
+
+func TestStatusBridgeModifyInstanceAuthorizationAndStacks(t *testing.T) {
+	bridge, _, target, _ := newBridgeFixture()
+	// Catalog entry 10 (burn): SourceOwnership "" => source-owned; dispellable.
+	bridge.Apply(skillv2.EffectCommand{Payload: skillv2.StatusCommand{SourceOwner: 1, Target: 2, Status: 10, DurationTicks: 20, Stacks: 2}})
+	instanceID := target.ActiveBuffs()[0].Instance
+
+	// A stranger may not edit a source-owned instance.
+	denied, _, err := bridge.Apply(skillv2.EffectCommand{Payload: statusInstanceCommand(5, 2, instanceID, "add_stacks", 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload := denied.Payload.(skillv2.StatusEffectResult); payload.Succeeded || payload.FailureReason != skillv2.ExpectedFailurePermissionDenied {
+		t.Fatalf("stranger edit accepted: %+v", payload)
+	}
+	// The source stacks it up to the cap (MaxStacks 3).
+	stacked, _, _ := bridge.Apply(skillv2.EffectCommand{Payload: statusInstanceCommand(1, 2, instanceID, "add_stacks", 5)})
+	if payload := stacked.Payload.(skillv2.StatusEffectResult); payload.Result.CurrentStacks != 3 || payload.Result.PreviousStacks != 2 {
+		t.Fatalf("add_stacks = %+v", payload.Result)
+	}
+	if got := target.AttributeCurrent(3); got != 160 { // 100 * (1 + 0.2*3)
+		t.Fatalf("modifier rescale = %d, want 160", got)
+	}
+	// The target itself may remove a dispellable instance.
+	removed, _, _ := bridge.Apply(skillv2.EffectCommand{Payload: statusInstanceCommand(2, 2, instanceID, "remove", 0)})
+	if payload := removed.Payload.(skillv2.StatusEffectResult); !payload.Result.Removed || target.AttributeCurrent(3) != 100 {
+		t.Fatalf("self remove = %+v haste=%d", payload.Result, target.AttributeCurrent(3))
+	}
+	// Vanished instances answer reference-expired.
+	expired, _, _ := bridge.Apply(skillv2.EffectCommand{Payload: statusInstanceCommand(1, 2, instanceID, "add_stacks", 1)})
+	if payload := expired.Payload.(skillv2.StatusEffectResult); payload.Succeeded || payload.FailureReason != skillv2.ExpectedFailureReferenceExpired {
+		t.Fatalf("expired ref = %+v", payload)
+	}
+}
+
+func TestStatusBridgeModifyInstanceDurationsAndTransfer(t *testing.T) {
+	bridge, _, target, tickPtr := newBridgeFixture()
+	// Make burn transferable+copyable with a duration whitelist and a cap.
+	entries := bridge.Catalog.Statuses.Entries
+	entries[0].Copyable, entries[0].Transferable, entries[0].Stealable = true, true, true
+	entries[0].DurationOperations = []string{"add_duration", "refresh"}
+	entries[0].MaximumDurationTicks = 30
+	other := NewCombatComponent(NewCombatDao(3, "game"))
+	other.InitCombatant(combat.Combatant{Alive: true, Health: 50, MaxHealth: 50})
+	other.SetAttributeBase(3, 100)
+	bridge.Resolver = mapResolver{2: target, 3: other}
+
+	bridge.Apply(skillv2.EffectCommand{Payload: skillv2.StatusCommand{SourceOwner: 1, Target: 2, Status: 10, DurationTicks: 20}})
+	instanceID := target.ActiveBuffs()[0].Instance
+	*tickPtr = 5
+
+	// add_duration: remaining 15 + 100 clamps at the 30-tick policy cap.
+	extended, _, _ := bridge.Apply(skillv2.EffectCommand{Payload: statusInstanceCommand(1, 2, instanceID, "add_duration", 100)})
+	if payload := extended.Payload.(skillv2.StatusEffectResult); payload.Result.DueTick != 35 || payload.Result.PreviousDueTick != 20 {
+		t.Fatalf("add_duration = %+v", payload.Result)
+	}
+	// set_duration is not whitelisted.
+	blocked, _, _ := bridge.Apply(skillv2.EffectCommand{Payload: statusInstanceCommand(1, 2, instanceID, "set_duration", 5)})
+	if payload := blocked.Payload.(skillv2.StatusEffectResult); payload.Succeeded || payload.FailureReason != skillv2.ExpectedFailurePolicyRejected {
+		t.Fatalf("whitelist bypassed: %+v", payload)
+	}
+	// Steal: a stranger transfers it because the policy is stealable.
+	command := statusInstanceCommand(9, 2, instanceID, "transfer_to", 0)
+	command.Target = 3
+	command.OwnershipPolicy = "new_source"
+	stolen, _, err := bridge.Apply(skillv2.EffectCommand{Payload: command})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := stolen.Payload.(skillv2.StatusEffectResult)
+	if !payload.Result.Removed || payload.Result.Created.Target != 3 || payload.Result.Created.ID.OpaqueID() == 0 {
+		t.Fatalf("transfer = %+v", payload.Result)
+	}
+	if len(target.ActiveBuffs()) != 0 || target.AttributeCurrent(3) != 100 {
+		t.Fatalf("source kept the buff: buffs=%d haste=%d", len(target.ActiveBuffs()), target.AttributeCurrent(3))
+	}
+	adopted := other.ActiveBuffs()
+	if len(adopted) != 1 || adopted[0].Source != 9 || other.AttributeCurrent(3) != 120 {
+		t.Fatalf("destination state: %+v haste=%d", adopted, other.AttributeCurrent(3))
+	}
+}

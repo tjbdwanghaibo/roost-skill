@@ -112,3 +112,46 @@ func TestPersistentRemoveOrderingIsDeterministic(t *testing.T) {
 		}
 	}
 }
+
+// Regression: RestoreRuntime used to construct via the fresh-runtime path,
+// which fast-forwards the event cursor to the host's frontier and compacts
+// everything before it — a destructive side effect that ran BEFORE the
+// checkpoint/host validation, so even a rejected restore had already deleted
+// the events a correctly-recovered host would need to replay. Restore
+// construction must never touch the host's event queue.
+func TestRestoreRuntimePreservesPostCheckpointEvents(t *testing.T) {
+	environment := abilityTestEnvironment()
+	program := compileAbilityTestSkill(t, environment, "restore-events", `{"mode":"tap"}`, 0, `{"flow":"finish"}`)
+	host := runtimeTestHost(environment)
+	runtime := NewRuntime(host, RuntimeOptions{})
+	if _, err := runtime.Activate(program, CastInput{Caster: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Advance(1); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := runtime.Checkpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursorAt := runtime.eventCursor
+	// World events arrive after the checkpoint, before the "crash".
+	if _, err := host.Apply(EffectCommand{Payload: HealCommand{Target: 2, Amount: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	postCheckpoint := host.Events(cursorAt)
+	if len(postCheckpoint) == 0 {
+		t.Fatal("fixture produced no post-checkpoint events")
+	}
+	resolver := ProgramResolverFunc(func(id, digest string) (*Program, error) { return program, nil })
+	// The heal advanced the host revision past the checkpoint, so this
+	// restore is correctly rejected — but rejection must leave the host
+	// untouched: before the fix, construction had already compacted the
+	// post-checkpoint events away.
+	if _, err := RestoreRuntime(host, RuntimeOptions{}, checkpoint, resolver); !errors.Is(err, ErrCheckpointHostMismatch) {
+		t.Fatalf("expected host mismatch, got %v", err)
+	}
+	if remaining := host.Events(cursorAt); len(remaining) != len(postCheckpoint) {
+		t.Fatalf("rejected restore compacted %d post-checkpoint events away", len(postCheckpoint)-len(remaining))
+	}
+}

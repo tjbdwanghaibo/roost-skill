@@ -1,6 +1,7 @@
 package combat
 
 import (
+	"errors"
 	"math"
 	"reflect"
 	"testing"
@@ -311,5 +312,26 @@ func TestChanceRollIsDeterministicAndPurposeScoped(t *testing.T) {
 	}
 	if hits < 850 || hits > 1150 {
 		t.Fatalf("2500bp chance hit %d/4000", hits)
+	}
+}
+
+// Regression: RestoreBuffContainer trusted persisted data — an instance id
+// beyond the sequence (or a duplicate) would later collide with a freshly
+// issued id, and ids double as attribute grant handles, corrupting modifier
+// bookkeeping far from the corrupt snapshot.
+func TestRestoreBuffContainerRejectsCorruptState(t *testing.T) {
+	valid := BuffContainerState{Sequence: 2, Active: []BuffInstance{{Instance: 1, Spec: BuffSpec{ID: 1}, Stacks: 1}, {Instance: 2, Spec: BuffSpec{ID: 2}, Stacks: 1}}}
+	if _, err := RestoreBuffContainer(valid); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]BuffContainerState{
+		"id beyond sequence": {Sequence: 1, Active: []BuffInstance{{Instance: 5, Spec: BuffSpec{ID: 1}, Stacks: 1}}},
+		"duplicate id":       {Sequence: 3, Active: []BuffInstance{{Instance: 2, Spec: BuffSpec{ID: 1}, Stacks: 1}, {Instance: 2, Spec: BuffSpec{ID: 2}, Stacks: 1}}},
+		"zero id":            {Sequence: 3, Active: []BuffInstance{{Instance: 0, Spec: BuffSpec{ID: 1}, Stacks: 1}}},
+	}
+	for name, state := range cases {
+		if _, err := RestoreBuffContainer(state); !errors.Is(err, ErrBuffStateCorrupt) {
+			t.Fatalf("%s accepted: %v", name, err)
+		}
 	}
 }

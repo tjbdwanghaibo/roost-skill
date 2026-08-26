@@ -61,8 +61,189 @@ func (bridge *StatusBridge) Apply(command skillv2.EffectCommand) (skillv2.Effect
 	case skillv2.AttributeModifierCommand:
 		result, err := bridge.applyAttributeModifier(payload)
 		return result, true, err
+	case skillv2.ModifyStatusInstanceCommand:
+		result, err := bridge.modifyStatusInstance(payload)
+		return result, true, err
 	}
 	return skillv2.EffectResult{}, false, nil
+}
+
+// modifyStatusInstance lands instance-handle operations (steal, transfer,
+// stack and duration edits) on the buff container. Instance addressing
+// contract: the opaque StatusInstanceRef id IS the combat.BuffInstanceID —
+// hosts that surface buff instances through Select must hand out the
+// container's instance ids as the opaque ids. Authorization and operation
+// gating mirror the MemoryHost matrix (SourceOwnership, Dispellable,
+// Copyable/Transferable/Stealable, DurationOperations, MaximumDurationTicks).
+func (bridge *StatusBridge) modifyStatusInstance(command skillv2.ModifyStatusInstanceCommand) (skillv2.EffectResult, error) {
+	component, ok := bridge.Resolver.CombatComponent(command.Status.Target)
+	if !ok {
+		return skillv2.EffectResult{Commit: skillv2.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{FailureReason: skillv2.ExpectedFailureReferenceExpired}}}, nil
+	}
+	id := combat.BuffInstanceID(command.Status.ID.OpaqueID())
+	var instance combat.BuffInstance
+	found := false
+	for _, candidate := range component.ActiveBuffs() {
+		if candidate.Instance == id {
+			instance, found = candidate, true
+			break
+		}
+	}
+	if !found {
+		return skillv2.EffectResult{Commit: skillv2.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{FailureReason: skillv2.ExpectedFailureReferenceExpired}}}, nil
+	}
+	policy, ok := bridge.statusPolicy(skillv2.StatusHandle(instance.Spec.ID))
+	if !ok {
+		return skillv2.EffectResult{}, fmt.Errorf("combatcomponent: buff %d has no status policy", instance.Spec.ID)
+	}
+	target := command.Status.Target
+	authorized := policy.SourceOwnership == "owner" && command.Owner == target ||
+		policy.SourceOwnership != "owner" && int64(command.Owner) == instance.Source
+	if command.Operation == "remove" && command.Owner == target {
+		authorized = true
+	}
+	if command.Operation == "transfer_to" && policy.Stealable {
+		authorized = true
+	}
+	if !authorized {
+		return skillv2.EffectResult{Commit: skillv2.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{FailureReason: skillv2.ExpectedFailurePermissionDenied}}}, nil
+	}
+	now := int64(bridge.CurrentTick())
+	clampDue := func(due int64) int64 {
+		if policy.MaximumDurationTicks > 0 && due-now > int64(policy.MaximumDurationTicks) {
+			return now + int64(policy.MaximumDurationTicks)
+		}
+		return due
+	}
+	durationAllowed := func(operation string) bool {
+		if len(policy.DurationOperations) == 0 {
+			return true
+		}
+		for _, allowed := range policy.DurationOperations {
+			if allowed == operation {
+				return true
+			}
+		}
+		return false
+	}
+	beforeStacks, beforeDue := int(instance.Stacks), skillv2.Tick(instance.DueTick)
+	remaining := instance.DueTick - now
+	if remaining < 0 {
+		remaining = 0
+	}
+	policyFailure := func() (skillv2.EffectResult, error) {
+		return skillv2.EffectResult{Commit: skillv2.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{FailureReason: skillv2.ExpectedFailurePolicyRejected}}}, nil
+	}
+	created := skillv2.StatusInstanceRef{}
+	removed := false
+	switch command.Operation {
+	case "remove":
+		if !policy.Dispellable {
+			return policyFailure()
+		}
+		component.RemoveBuff(id)
+		removed = true
+	case "add_stacks":
+		instance, removed = bridge.setStacks(component, id, instance.Stacks+command.Value)
+	case "set_stacks":
+		instance, removed = bridge.setStacks(component, id, command.Value)
+	case "add_duration":
+		if !durationAllowed(command.Operation) {
+			return policyFailure()
+		}
+		next := remaining + command.Value
+		if next < 1 {
+			next = 1
+		}
+		instance, _ = component.SetBuffDueTick(id, clampDue(now+next))
+	case "set_duration":
+		if !durationAllowed(command.Operation) {
+			return policyFailure()
+		}
+		next := command.Value
+		if next < 1 {
+			next = 1
+		}
+		instance, _ = component.SetBuffDueTick(id, clampDue(now+next))
+	case "mul_duration_bp":
+		if !durationAllowed(command.Operation) {
+			return policyFailure()
+		}
+		next := combat.ScaleBasisPoints(remaining, command.Value)
+		if next < 1 {
+			next = 1
+		}
+		instance, _ = component.SetBuffDueTick(id, clampDue(now+next))
+	case "refresh":
+		if !durationAllowed(command.Operation) {
+			return policyFailure()
+		}
+		total := instance.DueTick - instance.AppliedTick
+		if total < 1 {
+			total = 1
+		}
+		instance, _ = component.SetBuffDueTick(id, clampDue(now+total))
+	case "copy_to", "transfer_to":
+		allowed := command.Operation == "copy_to" && policy.Copyable || command.Operation == "transfer_to" && policy.Transferable
+		destination, alive := bridge.Resolver.CombatComponent(command.Target)
+		if command.Target == 0 || !alive || !destination.Combatant().Alive {
+			return skillv2.EffectResult{Commit: skillv2.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{FailureReason: skillv2.ExpectedFailureInvalidTarget}}}, nil
+		}
+		if !allowed || !validOwnershipPolicy(command.OwnershipPolicy) {
+			return policyFailure()
+		}
+		if bridge.HasGameplayTag != nil {
+			for _, immunity := range policy.ImmunityTags {
+				if bridge.HasGameplayTag(command.Target, immunity) {
+					return skillv2.EffectResult{Commit: skillv2.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{Succeeded: true}, Result: skillv2.StatusResult{Immune: true, PreviousStacks: beforeStacks, CurrentStacks: beforeStacks, DueTick: beforeDue, Status: command.Status}}}, nil
+				}
+			}
+		}
+		moved := instance
+		moved.AppliedTick = now
+		switch command.OwnershipPolicy {
+		case "original_owner":
+			moved.Source = int64(target)
+		case "new_owner":
+			moved.Source = int64(command.Target)
+		case "new_source":
+			moved.Source = int64(command.Owner)
+		}
+		createdID := destination.AdoptBuff(moved)
+		created = skillv2.StatusInstanceRef{ID: skillv2.NewStatusInstanceID(uint64(createdID)), Target: command.Target}
+		if command.Operation == "transfer_to" {
+			component.RemoveBuff(id)
+			removed = true
+		}
+	default:
+		return skillv2.EffectResult{}, fmt.Errorf("combatcomponent: unsupported status instance operation %q", command.Operation)
+	}
+	context := command.Event
+	context.Owner, context.Target, context.Result = command.Owner, target, "status_instance_"+command.Operation
+	receipt := bridge.Revision.CommitEffect([]EffectEvent{{Kind: "status_instance_" + command.Operation, Entity: target, Context: context}})
+	receipt.Changed = true
+	currentStacks := int(instance.Stacks)
+	dueTick := skillv2.Tick(instance.DueTick)
+	if removed {
+		currentStacks = 0
+	}
+	removedStacks := beforeStacks - currentStacks
+	if removedStacks < 0 {
+		removedStacks = 0
+	}
+	return skillv2.EffectResult{Commit: receipt, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{Succeeded: true}, Result: skillv2.StatusResult{Applied: true, Removed: removed, PreviousStacks: beforeStacks, CurrentStacks: currentStacks, RemovedStacks: removedStacks, DueTick: dueTick, PreviousDueTick: beforeDue, Status: command.Status, Created: created}}}, nil
+}
+
+func (bridge *StatusBridge) setStacks(component *CombatComponent, id combat.BuffInstanceID, stacks int64) (combat.BuffInstance, bool) {
+	if stacks < 0 {
+		stacks = 0
+	}
+	instance, _ := component.SetBuffStacks(id, stacks)
+	return instance, stacks == 0
+}
+
+func validOwnershipPolicy(policy string) bool {
+	return policy == "original_owner" || policy == "new_owner" || policy == "new_source"
 }
 
 func (bridge *StatusBridge) statusPolicy(handle skillv2.StatusHandle) (skillv2.StatusCatalogEntry, bool) {

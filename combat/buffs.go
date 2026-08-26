@@ -1,5 +1,10 @@
 package combat
 
+import (
+	"errors"
+	"fmt"
+)
+
 // BuffID identifies a buff definition in the host's catalog.
 type BuffID uint32
 
@@ -213,6 +218,55 @@ func (container *BuffContainer) Remove(id BuffInstanceID) (BuffInstance, bool) {
 	return BuffInstance{}, false
 }
 
+// SetStacks pins an instance's stack count (clamped to [0, MaxStacks]) and
+// re-materializes its attribute grants at the new scale. A count of zero
+// removes the instance. Returns the post-change instance.
+func (container *BuffContainer) SetStacks(id BuffInstanceID, stacks int64) (BuffInstance, bool) {
+	for index := range container.active {
+		instance := &container.active[index]
+		if instance.Instance != id {
+			continue
+		}
+		maximum := maxInt64(instance.Spec.MaxStacks, 1)
+		if stacks > maximum {
+			stacks = maximum
+		}
+		if stacks <= 0 {
+			return container.removeAt(index), true
+		}
+		instance.Stacks = stacks
+		container.grantModifiers(instance)
+		return *instance, true
+	}
+	return BuffInstance{}, false
+}
+
+// SetDueTick pins an instance's expiry (0 means permanent).
+func (container *BuffContainer) SetDueTick(id BuffInstanceID, dueTick int64) (BuffInstance, bool) {
+	for index := range container.active {
+		instance := &container.active[index]
+		if instance.Instance != id {
+			continue
+		}
+		instance.DueTick = dueTick
+		return *instance, true
+	}
+	return BuffInstance{}, false
+}
+
+// Adopt injects a foreign instance (a copy or transfer from another
+// container) under a fresh local instance id, bypassing immunity and
+// stacking rules: the caller has already decided the move is legal. The
+// adopted instance keeps its spec, stacks, source, and expiry.
+func (container *BuffContainer) Adopt(instance BuffInstance) BuffInstanceID {
+	container.sequence++
+	instance.Instance = BuffInstanceID(container.sequence)
+	instance.Spec = copyBuffSpec(instance.Spec)
+	container.active = append(container.active, instance)
+	container.grantModifiers(&container.active[len(container.active)-1])
+	return instance.Instance
+}
+
 // Tick expires every instance due at or before now and returns them in
 // application order.
 func (container *BuffContainer) Tick(now int64) []BuffInstance {
@@ -307,9 +361,32 @@ func (container *BuffContainer) State() BuffContainerState {
 	return state
 }
 
+// ErrBuffStateCorrupt rejects a BuffContainerState whose instances violate
+// the container's invariants.
+var ErrBuffStateCorrupt = errors.New("combat: buff container state corrupt")
+
 // RestoreBuffContainer rebuilds a container from a State snapshot. Link an
 // AttributeSet afterwards to re-materialize modifier grants.
-func RestoreBuffContainer(state BuffContainerState) *BuffContainer {
+//
+// The snapshot is validated before use: instance ids must be unique, nonzero,
+// and no greater than the sequence counter. Accepting a violating snapshot
+// would let the sequence re-issue a live id later — and instance ids double
+// as attribute grant handles, so a collision silently corrupts modifier
+// bookkeeping far from the corrupt data. Fail here instead.
+func RestoreBuffContainer(state BuffContainerState) (*BuffContainer, error) {
+	seen := make(map[BuffInstanceID]struct{}, len(state.Active))
+	for _, instance := range state.Active {
+		if instance.Instance == 0 {
+			return nil, fmt.Errorf("%w: instance id 0", ErrBuffStateCorrupt)
+		}
+		if uint64(instance.Instance) > state.Sequence {
+			return nil, fmt.Errorf("%w: instance id %d beyond sequence %d", ErrBuffStateCorrupt, instance.Instance, state.Sequence)
+		}
+		if _, duplicate := seen[instance.Instance]; duplicate {
+			return nil, fmt.Errorf("%w: duplicate instance id %d", ErrBuffStateCorrupt, instance.Instance)
+		}
+		seen[instance.Instance] = struct{}{}
+	}
 	container := NewBuffContainer()
 	container.sequence = state.Sequence
 	container.SetTenacityBP(state.TenacityBP)
@@ -318,5 +395,5 @@ func RestoreBuffContainer(state BuffContainerState) *BuffContainer {
 		instance.Spec = copyBuffSpec(instance.Spec)
 		container.active[index] = instance
 	}
-	return container
+	return container, nil
 }

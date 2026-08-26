@@ -234,6 +234,27 @@ type Runtime struct {
 }
 
 func NewRuntime(host Host, options RuntimeOptions) *Runtime {
+	runtime := newRuntimeCore(host, options)
+	// Fresh runtimes start at the host's current event frontier: everything
+	// already in the queue predates this runtime and is never replayed, so it
+	// may be compacted away. RestoreRuntime must NOT take this path — a
+	// restored runtime resumes from the checkpoint's cursor and needs every
+	// event after it preserved for replay.
+	if host != nil {
+		for _, event := range host.Events(0) {
+			if event.Cursor > runtime.eventCursor {
+				runtime.eventCursor = event.Cursor
+			}
+		}
+		if compactor, ok := host.(HostEventCompactor); ok && runtime.eventCursor != 0 {
+			compactor.CompactEventsThrough(runtime.eventCursor)
+		}
+	}
+	return runtime
+}
+
+// newRuntimeCore builds a runtime without touching the host's event queue.
+func newRuntimeCore(host Host, options RuntimeOptions) *Runtime {
 	if options.SupportedCompilerSemanticsRevision == "" {
 		options.SupportedCompilerSemanticsRevision = supportedCompilerSemanticsRevision
 	}
@@ -302,16 +323,6 @@ func NewRuntime(host Host, options RuntimeOptions) *Runtime {
 		abilities: make(map[abilityKey]*abilityState), abilityByProgram: make(map[skillStateKey]AbilityHandle),
 		dirtyCooldowns: make(map[cooldownKey]struct{}), dirtyResources: make(map[skillStateKey]struct{}),
 		dirtyAbilities: make(map[abilityKey]struct{}), dirtyPolicies: make(map[skillStateKey]struct{}),
-	}
-	if host != nil {
-		for _, event := range host.Events(0) {
-			if event.Cursor > runtime.eventCursor {
-				runtime.eventCursor = event.Cursor
-			}
-		}
-		if compactor, ok := host.(HostEventCompactor); ok && runtime.eventCursor != 0 {
-			compactor.CompactEventsThrough(runtime.eventCursor)
-		}
 	}
 	runtime.stateMutationBaseline = runtime.stateSnapshotLocked()
 	runtime.stateMutationReady = true
