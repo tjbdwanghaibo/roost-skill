@@ -22,6 +22,10 @@ const (
 	BuffExtend
 	// BuffIgnore keeps the existing instance untouched.
 	BuffIgnore
+	// BuffIndependent always creates a fresh instance with its own duration,
+	// never merging with existing instances of the same ID (independently
+	// timed DoTs, one-shot attribute modifiers).
+	BuffIndependent
 )
 
 // BuffSpec is a buff definition. Specs are value data owned by the caller;
@@ -38,6 +42,9 @@ type BuffSpec struct {
 	// TenacityAffected durations are reduced by the container's tenacity:
 	// duration * (10000 - tenacityBP) / 10000, floored at 1 tick.
 	TenacityAffected bool
+	// MaxDurationTicks, when positive, caps the effective duration after
+	// tenacity scaling.
+	MaxDurationTicks int64
 	// Modifiers are granted to the linked AttributeSet per stack.
 	Modifiers []Modifier
 }
@@ -102,12 +109,15 @@ func (container *BuffContainer) effectiveDuration(spec BuffSpec) int64 {
 	if spec.DurationTicks <= 0 {
 		return 0
 	}
-	if !spec.TenacityAffected || container.tenacityBP == 0 {
-		return spec.DurationTicks
+	duration := spec.DurationTicks
+	if spec.TenacityAffected && container.tenacityBP > 0 {
+		duration = ScaleBasisPoints(duration, BasisPointScale-container.tenacityBP)
+		if duration < 1 {
+			duration = 1
+		}
 	}
-	duration := ScaleBasisPoints(spec.DurationTicks, BasisPointScale-container.tenacityBP)
-	if duration < 1 {
-		duration = 1
+	if spec.MaxDurationTicks > 0 && duration > spec.MaxDurationTicks {
+		duration = spec.MaxDurationTicks
 	}
 	return duration
 }
@@ -132,7 +142,7 @@ func (container *BuffContainer) Apply(spec BuffSpec, tick, source int64) (BuffIn
 		return 0, BuffBlockedImmune
 	}
 	duration := container.effectiveDuration(spec)
-	for index := range container.active {
+	for index := 0; spec.StackPolicy != BuffIndependent && index < len(container.active); index++ {
 		instance := &container.active[index]
 		if instance.Spec.ID != spec.ID {
 			continue

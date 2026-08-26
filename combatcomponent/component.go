@@ -218,6 +218,16 @@ func (component *CombatComponent) ApplyBuff(spec combat.BuffSpec, tick, source i
 	return id, outcome
 }
 
+// RemoveBuff drops one buff instance by id.
+func (component *CombatComponent) RemoveBuff(id combat.BuffInstanceID) (combat.BuffInstance, bool) {
+	component.undoBuffs()
+	instance, removed := component.dao.buffs.Remove(id)
+	if removed {
+		component.markDirty(FieldBuffs)
+	}
+	return instance, removed
+}
+
 // DispelBuffs removes up to limit buffs carrying the tag, newest first.
 func (component *CombatComponent) DispelBuffs(tag combat.Tag, limit int) []combat.BuffInstance {
 	component.undoBuffs()

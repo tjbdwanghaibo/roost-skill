@@ -275,3 +275,41 @@ func TestResolveDamageClampsNegativeRatesAndShield(t *testing.T) {
 		t.Fatalf("negative dealt/critical rates leaked: %+v", outcome)
 	}
 }
+
+func TestBuffIndependentPolicyNeverMerges(t *testing.T) {
+	container := NewBuffContainer()
+	spec := BuffSpec{ID: 40, StackPolicy: BuffIndependent, DurationTicks: 10}
+	container.Apply(spec, 0, 1)
+	container.Apply(spec, 5, 2)
+	active := container.Active()
+	if len(active) != 2 || active[0].DueTick != 10 || active[1].DueTick != 15 {
+		t.Fatalf("independent instances = %+v", active)
+	}
+	if expired := container.Tick(10); len(expired) != 1 || expired[0].Source != 1 {
+		t.Fatalf("expired = %+v", expired)
+	}
+}
+
+func TestChanceRollIsDeterministicAndPurposeScoped(t *testing.T) {
+	key := []byte("match-seed")
+	first := RollValue(key, "crit", 1, 2, 3)
+	if first != RollValue(key, "crit", 1, 2, 3) {
+		t.Fatal("same coordinates rolled differently")
+	}
+	if first == RollValue(key, "dodge", 1, 2, 3) && first == RollValue(key, "crit", 1, 2, 4) {
+		t.Fatal("purpose and coordinates do not separate rolls")
+	}
+	if ChanceRoll(key, "crit", 0, 1) || !ChanceRoll(key, "crit", 10000, 1) {
+		t.Fatal("chance bounds broken")
+	}
+	// Uniformity sanity: ~25% chance over 4000 coordinates lands near 1000.
+	hits := 0
+	for coordinate := uint64(0); coordinate < 4000; coordinate++ {
+		if ChanceRoll(key, "crit", 2500, coordinate) {
+			hits++
+		}
+	}
+	if hits < 850 || hits > 1150 {
+		t.Fatalf("2500bp chance hit %d/4000", hits)
+	}
+}

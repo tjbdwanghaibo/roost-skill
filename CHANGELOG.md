@@ -1,0 +1,31 @@
+# Changelog
+
+本文件从 v1.4.0 起维护；更早版本见 git 历史。
+
+## [Unreleased]
+
+### Added
+- `combatcomponent.StatusBridge`：skillv2 的 status 域效果命令（Status/RemoveStatus/DispelStatus/AttributeModifier）按 status catalog 标准化落到 combat 容器，事件词表与 MemoryHost 一致；挂 `HostAdapter.Status` 后由 Apply 自动分发。有意差异：mul_bp 修饰加性叠加（非 MemoryHost 乘性链），见 docs/skill-casting-and-combat.md。
+- `HostAdapter` 支持 `ResourceCommand`（set/add/spend 语义对齐 MemoryHost：spend 原子校验、no-op 不推进 revision）。
+- `combat.ChanceRoll`/`RollValue`：HMAC 确定性掷点（暴击/闪避概率 → 事实），推荐以效果命令 Event 坐标为掷点坐标。
+- `combat.BuffContainer` 新增 `BuffIndependent` 叠加策略（同 ID 独立实例独立计时）与 `BuffSpec.MaxDurationTicks`（韧性缩放后的时长上限）；`CombatComponent.RemoveBuff`。
+- `examples/`：三个可运行工程（combat 电池、fireball 全链路、statusbridge + 掷点）。
+- docs：skill-casting-and-combat.md 补 StatusBridge/掷点章节；AI 作者提示词补 concurrent/GCD/窗口表达式语法。
+
+## [1.5.0] - 2026-08
+
+破坏性变化：编译器语义修订升级为 `skillv2-compiler-2`（新字段进入 gameplay digest），v1.2.x 的 checkpoint / 回放 / skillcompose 契约需重建；迁移说明见 `docs/skill-casting-and-combat.md`。
+
+- **模块路径改为 `github.com/tjbdwanghaibo/roost-skill`**（与仓库名一致、去掉 `/v2` major 后缀）——自本版起外部可直接 `go get`。wire schema 仍为 `cube.skill/v2`，技能 JSON 不受影响。
+- 修复（复审核实的缺陷）：ammo 只读路径不再回写 ability 缓存（曾永久污染增量 baseline 致 Checkpoint 失效）；回充同步 ability 缓存并发出 AbilityUpsert；`Cancel`/`Interrupt` 释放 policy 槽位（toggle 不再被永久封死、cast 不再无界滞留）；combat 管线全部 BP 段夹取非负；`mutationSortKey` 补入 StateHandle（persistent_remove 顺序跨运行确定）；IR 遍历器覆盖 castWindow 表达式与 sustainCosts（属性读不再被 lowering 成句柄 0，并加 panic 防御）。
+- 导出 `ValueKind*`/`Quantity*` 常量与 `AuthorityDigest`：外部宿主可以构造 basis_points 攻速属性并驱动 windup 表达式。
+- Inspect 补齐：`ProgramView.GlobalCooldownTicks`、`CastWindowView` 的 Concurrent 与表达式边界字段。
+- 新文档 `docs/skill-casting-and-combat.md`；CI 增加 `release-hygiene` 门禁。
+
+## [1.4.0] - 2026-08
+
+- 空间度量统一为欧氏（对角追踪弹 41% 超速修复）；免分配定点数学（128 位 mulDivRounded / 牛顿 isqrt，与 big.Int 参考位一致）；随机选择 HMAC 分数预计算。
+- 状态突变由全量快照 diff 改为写点记录增量（提交 ~180µs → ~114ns），测试套件带影子校验等价门。
+- 施法互斥（`concurrent`/`ErrCasterBusy`）、全局冷却（`global_cooldown_ticks`、`"$gcd"` 哨兵、commit 起算）、windup/recovery 表达式化（编译期 min/max 钳制）。
+- 新增 `combat/` 零依赖战斗电池与 `combatcomponent/` cube-core 集成（DirtyTracker、nest 事务逆操作、HostAdapter）；MemoryHost 收敛到同一份战斗数学。cube-core 依赖升至 v1.6.2。
+- README 定位声明：2D 权威战斗运行时，不做 Z 轴 / 寻路 / 客户端预测。

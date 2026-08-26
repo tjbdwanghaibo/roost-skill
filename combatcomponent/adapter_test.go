@@ -38,8 +38,8 @@ func newAdapterFixture() (*HostAdapter, *testRevision, *CombatComponent, *Combat
 	adapter := &HostAdapter{
 		Resolver: mapResolver{1: attacker, 2: defender},
 		Revision: revision,
-		ResourceAttribute: func(resource string, _ skillv2.ResourceHandle) (combat.AttributeID, bool) {
-			if resource == "mana" {
+		ResourceAttribute: func(resource string, handle skillv2.ResourceHandle) (combat.AttributeID, bool) {
+			if resource == "mana" || handle == 5 {
 				return 5, true
 			}
 			return 0, false

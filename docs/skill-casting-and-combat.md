@@ -67,7 +67,7 @@ Host 的 `Read` 返回值用 `skillv2.AttributeRuntimeValue(catalog, handle, val
 `combat` 包是可复用的确定性战斗数学，零外部依赖：
 
 - `AttributeSet`：base + 修饰器（flat 求和 + rateBP 加性求和），`Grant`/`Revoke` 完全可逆、结果与授予顺序无关。
-- `BuffContainer`：叠层（refresh / extend / ignore 策略）、驱散标签、免疫标签、韧性减时（`SetTenacityBP`），可 `LinkAttributes` 让 buff 修饰器自动物化为属性授予。
+- `BuffContainer`：叠层（refresh / extend / ignore / independent 策略，independent 每次应用都是独立计时的新实例）、驱散标签、免疫标签、韧性减时（`SetTenacityBP`）、`MaxDurationTicks` 时长上限（在韧性缩放之后钳制），可 `LinkAttributes` 让 buff 修饰器自动物化为属性授予。
 - `ResolveDamage`：twelve_stage_v1 十二段伤害管线（命中回避 → 抗性穿透 → 元素/增伤/减伤 BP → 暴击 → 上下限 → 护盾吸收 → 死亡防护钩子 → 吸血）。随机性外置：闪避/暴击等以预掷事实传入。所有 BP 段夹取非负。
 - skillv2 的 `MemoryHost` 直接运行在这份代码上：参考实现与生产实现共享同一份数学。
 
@@ -85,6 +85,30 @@ attributes.Observe(func(id combat.AttributeID) {
     }
 })
 ```
+
+## StatusBridge：status 命令落到 combat 容器
+
+`combatcomponent.StatusBridge` 把 skillv2 的 status 域效果命令（`StatusCommand` / `RemoveStatusCommand` / `DispelStatusCommand` / `AttributeModifierCommand`）标准化地落到 combat 容器上，消灭"status 与 buff 双体系各自实现"的第三套状态系统：
+
+- catalog 的 `StatusCatalogEntry` 驱动映射：`MaxStacks`/`RefreshPolicy`（refresh/extend/ignore/replace）/`DispelCategory`（作为驱散 Tag）/`TenacityPolicy: scale_duration`/`MaximumDurationTicks`/`AttributeModifiers` 全部翻译为 `combat.BuffSpec`；
+- 免疫标签是世界事实，经 `HasGameplayTag` 回调判定（nil 则关闭该检查）；
+- `AttributeModifierCommand` 以保留 BuffID（`AttributeModifierBuffID`）+ `BuffIndependent` 策略应用——每条命令独立计时，与 MemoryHost 的逐条 modifier 实例语义一致；
+- 事件词表与 MemoryHost 相同（`status_applied` / `status_immune` / `status_removed` / `status_dispelled` / `attribute_modifier_applied`），proc 过滤器两边行为一致；
+- 挂进 `HostAdapter.Status` 字段后，`HostAdapter.Apply` 自动把 status 域命令转给桥（同时 `ResourceCommand` 也由 adapter 落到映射属性上，语义与 MemoryHost 相同：spend 原子校验、no-op 不推进 revision）。
+
+**一处有意的语义差异**：`mul_bp` 修饰在桥/AttributeSet 中按 **基点增量加性叠加**（两个 ×1.2 = +40%，顺序无关、事务回滚可精确逆转），而 MemoryHost 是乘性链（= +44%）。一个游戏只选一种宿主语义并保持一致。
+
+## 确定性掷点（暴击/闪避概率 → 事实）
+
+伤害管线只接受预掷事实（`Dodge`/`ForceCritical`…）。`combat.ChanceRoll` / `combat.RollValue` 是产生这些事实的标准方式：
+
+```go
+// 同一 key + purpose + 坐标永远得到同一结果——副本与回放位一致。
+crit := combat.ChanceRoll(matchSeed, "crit", critChanceBP,
+    uint64(event.RootEventID), uint64(event.EventID), uint64(event.EffectIndex), uint64(target))
+```
+
+推荐坐标取效果命令 Event 上的 `RootEventID`/`EventID`/`EffectIndex` 加目标实体——每个伤害实例独立掷点且可复现；不同 purpose（"crit"/"dodge"）在同一坐标下相互独立。
 
 ## combatcomponent：cube-core 集成
 

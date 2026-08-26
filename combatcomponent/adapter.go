@@ -52,8 +52,12 @@ type HostAdapter struct {
 	// disables status-driven hooks.
 	Hooks func(source, target skillv2.EntityID) combat.Hooks
 	// ResourceAttribute maps a resource to the attribute channel that backs
-	// it; required for PayCosts and resource reads.
+	// it; required for PayCosts, resource reads, and resource commands.
 	ResourceAttribute func(resource string, handle skillv2.ResourceHandle) (combat.AttributeID, bool)
+	// Status, when set, extends Apply to the status-domain commands
+	// (StatusCommand, RemoveStatusCommand, DispelStatusCommand,
+	// AttributeModifierCommand) through a StatusBridge.
+	Status *StatusBridge
 }
 
 // Apply handles a combat effect command. handled=false means the payload is
@@ -69,8 +73,65 @@ func (adapter *HostAdapter) Apply(command skillv2.EffectCommand) (skillv2.Effect
 	case skillv2.ShieldCommand:
 		result, err := adapter.applyShield(payload)
 		return result, true, err
+	case skillv2.ResourceCommand:
+		result, err := adapter.applyResource(payload)
+		return result, true, err
+	}
+	if adapter.Status != nil {
+		return adapter.Status.Apply(command)
 	}
 	return skillv2.EffectResult{}, false, nil
+}
+
+// applyResource lands a resource gain/spend/set on the mapped attribute
+// base, with the MemoryHost's semantics: spend/sub fails atomically on
+// insufficient funds, negative results are rejected, and a no-op change
+// commits nothing.
+func (adapter *HostAdapter) applyResource(command skillv2.ResourceCommand) (skillv2.EffectResult, error) {
+	component, ok := adapter.Resolver.CombatComponent(command.Target)
+	if !ok {
+		return skillv2.EffectResult{}, fmt.Errorf("combatcomponent: entity %d has no combat component", command.Target)
+	}
+	attribute, mapped := adapter.ResourceAttribute("", command.Resource)
+	if !mapped {
+		return skillv2.EffectResult{}, fmt.Errorf("combatcomponent: resource handle %d has no attribute mapping", command.Resource)
+	}
+	before := component.AttributeBase(attribute)
+	after := before
+	switch command.Operation {
+	case "set":
+		after = command.Amount
+	case "add":
+		after = saturatingAttributeAdd(before, command.Amount)
+	case "spend", "sub":
+		if command.Amount < 0 || before < command.Amount {
+			return skillv2.EffectResult{}, skillv2.ErrInsufficientResource
+		}
+		after = before - command.Amount
+	default:
+		return skillv2.EffectResult{}, fmt.Errorf("combatcomponent: unsupported resource operation %q", command.Operation)
+	}
+	if after < 0 {
+		return skillv2.EffectResult{}, skillv2.ErrInsufficientResource
+	}
+	if after == before {
+		return skillv2.EffectResult{Commit: skillv2.CommitReceipt{Revision: adapter.Revision.CurrentRevision()}, Value: skillv2.ResourceRuntimeValue(after)}, nil
+	}
+	component.SetAttributeBase(attribute, after)
+	context := skillv2.EventContext{Target: command.Target, Result: "resource_changed"}
+	receipt := adapter.Revision.CommitEffect([]EffectEvent{{Kind: "resource_changed", Entity: command.Target, Context: context}})
+	receipt.Changed = true
+	return skillv2.EffectResult{Commit: receipt, Value: skillv2.ResourceRuntimeValue(after)}, nil
+}
+
+func saturatingAttributeAdd(left, right int64) int64 {
+	if right > 0 && left > math.MaxInt64-right {
+		return math.MaxInt64
+	}
+	if right < 0 && left < math.MinInt64-right {
+		return math.MinInt64
+	}
+	return left + right
 }
 
 func (adapter *HostAdapter) applyDamage(command skillv2.DamageCommand) (skillv2.EffectResult, error) {
