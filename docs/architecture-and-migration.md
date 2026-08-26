@@ -82,9 +82,9 @@ cast commit 后产生。因此客户端永远不会先看到一个被权威层�
 
 这是三个仓库的原子设计变更，但版本发布必须按依赖方向进行：
 
-1. 发布 `cube-core v1.6.2`（包含 `syncstream`）。
+1. 发布 `cube-core v1.6.4`（包含 `syncstream`）。
 2. 发布 Go 模块 `github.com/tjbdwanghaibo/roost-skill`（v1.5.0 起模块路径与仓库名一致，可直接 go get；wire/语义版本线仍为 skillv2）。
-3. 发布/确认 `cube-kit v1.6.1` transport adapter。
+3. 发布/确认 `cube-kit v1.7.1` transport adapter。
 4. 具体游戏升级 roost-skill/cube-kit，替换旧导入路径：
 
 ```text

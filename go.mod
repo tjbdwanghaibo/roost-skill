@@ -2,7 +2,7 @@ module github.com/tjbdwanghaibo/roost-skill
 
 go 1.25.0
 
-require github.com/tjbdwanghaibo/cube-core v1.6.2
+require github.com/tjbdwanghaibo/cube-core v1.6.4
 
 require (
 	github.com/modern-go/gls v0.0.0-20250215024828-78308f6bb19d // indirect

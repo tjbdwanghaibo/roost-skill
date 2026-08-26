@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### Changed
+- 依赖升级：cube-core v1.6.4、（e2e）cube-kit v1.7.1；docs 中版本引用同步，并新增 CI 门禁"docs versions match go.mod"防再次漂移。
+
 ### Added
 - `combatcomponent.StatusBridge`：skillv2 的 status 域效果命令（Status/RemoveStatus/DispelStatus/AttributeModifier）按 status catalog 标准化落到 combat 容器，事件词表与 MemoryHost 一致；挂 `HostAdapter.Status` 后由 Apply 自动分发。有意差异：mul_bp 修饰加性叠加（非 MemoryHost 乘性链），见 docs/skill-casting-and-combat.md。
 - `HostAdapter` 支持 `ResourceCommand`（set/add/spend 语义对齐 MemoryHost：spend 原子校验、no-op 不推进 revision）。

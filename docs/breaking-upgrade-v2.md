@@ -13,8 +13,8 @@ github.com/tjbdwanghaibo/roost-skill
 
 所有 import 必须带 `/v2`。发布和部署基线为：
 
-- `cube-core v1.6.2`；
-- `cube-kit v1.6.1`；
+- `cube-core v1.6.4`；
+- `cube-kit v1.7.1`；
 - `roost-skill v2.0.0`。
 
 禁止在生产 `go.mod` 中使用本地 `replace`。仓库内的 replace 只允许存在于

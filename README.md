@@ -4,7 +4,7 @@
 
 - Go 模块：`github.com/tjbdwanghaibo/roost-skill`（自 `v1.5.0` 起可直接 `go get`；不使用 `/v2` major 路径，版本沿 v1.x tag 线演进）
 - 当前 wire/语义线：**v2**（`skillv2` 包，JSON schema 为 `cube.skill/v2`）；编译器语义修订：**`skillv2-compiler-2`**
-- 依赖基线：`cube-core v1.6.2`；对具体游戏服务器、渲染器、传输层零依赖
+- 依赖基线：`cube-core v1.6.4`；对具体游戏服务器、渲染器、传输层零依赖
 
 ## Scope：明确的非目标（deliberate non-goals）
 
