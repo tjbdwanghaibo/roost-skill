@@ -746,7 +746,13 @@ func (c *loweringContext) lowerValue(value valueIR, scope lowerScope) programVal
 		}
 		return result
 	case *attributeReadValueIR:
-		plan := c.artifacts.snapshots.reads[typed.source.Path]
+		plan, planned := c.artifacts.snapshots.reads[typed.source.Path]
+		if !planned {
+			// A read the snapshot pass never visited would lower to attribute
+			// handle 0 and silently read the wrong (or no) attribute at
+			// runtime — the walkValues traversal must cover every value site.
+			panic("skillv2: attribute read at " + typed.source.Path + " has no snapshot plan")
+		}
 		return attributeReadProgramValue{entity: c.lowerValue(typed.entity, scope), attribute: plan.Attribute, snapshot: plan.Snapshot, snapshotSlot: plan.SnapshotSlot, typ: typed.resolvedType}
 	case *stateReadValueIR:
 		return stateReadProgramValue{state: c.lowerStateReference(typed.state), binding: c.lowerStateBinding(typed.owner, typed.subject, typed.teamOf, scope), snapshot: typed.snapshot, typ: typed.resolvedType}

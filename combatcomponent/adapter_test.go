@@ -4,9 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	skillv2 "github.com/tjbdwanghaibo/cube-skill/v2/skillv2"
+	"github.com/tjbdwanghaibo/roost-skill/skillv2"
 
-	"github.com/tjbdwanghaibo/cube-skill/v2/combat"
+	"github.com/tjbdwanghaibo/roost-skill/combat"
 )
 
 type mapResolver map[skillv2.EntityID]*CombatComponent

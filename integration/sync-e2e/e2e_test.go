@@ -9,8 +9,8 @@ import (
 	coresync "github.com/tjbdwanghaibo/cube-core/sync"
 	corestream "github.com/tjbdwanghaibo/cube-core/syncstream"
 	streamadapter "github.com/tjbdwanghaibo/cube-kit/syncstream"
-	"github.com/tjbdwanghaibo/cube-skill/v2/skillsync"
-	"github.com/tjbdwanghaibo/cube-skill/v2/skillv2"
+	"github.com/tjbdwanghaibo/roost-skill/skillsync"
+	"github.com/tjbdwanghaibo/roost-skill/skillv2"
 )
 
 type confirmedBus struct {

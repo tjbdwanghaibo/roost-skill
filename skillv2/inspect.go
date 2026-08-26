@@ -8,7 +8,7 @@ func Inspect(program *Program) ProgramView {
 		ID: program.id, Name: program.name, Description: program.description,
 		CompilerSemanticsRevision: program.compilerSemanticsRevision,
 		Authority:                 program.authority, Identity: InspectIdentity(program),
-		CooldownTicks: program.cooldownTicks, Cast: inspectCast(program), Costs: inspectCosts(program), GameplayTags: append([]GameplayTagHandle(nil), program.gameplayTags...), Input: inspectInput(program),
+		CooldownTicks: program.cooldownTicks, GlobalCooldownTicks: program.globalCooldownTicks, Cast: inspectCast(program), Costs: inspectCosts(program), GameplayTags: append([]GameplayTagHandle(nil), program.gameplayTags...), Input: inspectInput(program),
 		Memory: inspectMemory(program), PersistentState: inspectPersistentState(program), Locals: inspectLocals(program), Phases: inspectPhases(program), Roots: inspectRoots(program),
 		Operations: inspectOperations(program), Selectors: inspectSelectors(program),
 		RandomSites: inspectRandomSites(program), Limits: InspectMetrics(program),
@@ -22,7 +22,10 @@ func inspectCast(program *Program) CastWindowView {
 	cast := program.cast
 	return CastWindowView{
 		WindupTicks: cast.windupTicks, CommitTick: cast.commitTick, RecoveryTicks: cast.recoveryTicks,
-		Movement: cast.movement, Turning: cast.turning, InterruptTags: append([]GameplayTagHandle(nil), cast.interruptTags...),
+		HasWindupExpression: cast.hasWindupExpression, WindupTicksMin: cast.windupTicksMin, WindupTicksMax: cast.windupTicksMax,
+		HasRecoveryExpression: cast.hasRecoveryExpression, RecoveryTicksMin: cast.recoveryTicksMin, RecoveryTicksMax: cast.recoveryTicksMax,
+		Concurrent: cast.concurrent,
+		Movement:   cast.movement, Turning: cast.turning, InterruptTags: append([]GameplayTagHandle(nil), cast.interruptTags...),
 		RefundBeforeCommit: cast.refundBeforeCommit,
 		Mode:               string(cast.mode), PulseIntervalTicks: cast.pulseIntervalTicks, MaxDurationTicks: cast.maxDurationTicks,
 		MaxChargeTicks: cast.maxChargeTicks, MinChargeBP: cast.minChargeBP, AutoRelease: cast.autoRelease,

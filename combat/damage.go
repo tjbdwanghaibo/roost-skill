@@ -49,6 +49,9 @@ type Combatant struct {
 	DamageDealtBP        int64 // 0 means the 10000 default
 	DamageTakenBP        int64 // 0 means the 10000 default
 	CriticalMultiplierBP int64 // 0 means the 15000 default
+	// ElementMultipliersBP scales damage per element; a missing or zero entry
+	// means the 10000 default, so full element immunity is expressed with the
+	// DamageImmune flag or a dodge fact, never a 0 multiplier.
 	ElementMultipliersBP map[Element]int64
 	VampBP               int64
 
@@ -173,11 +176,14 @@ func ResolveDamage(source, target *Combatant, input DamageInput, hooks Hooks) (D
 	}
 	outcome.Mitigated = amount
 
+	// Rate stages clamp to zero after each scale: hosts project modifier
+	// stacks into these BP fields, and a stack driven below -10000 must mean
+	// "no damage", never negative damage (which would grant shield or health).
 	elementBP := target.ElementMultipliersBP[input.Element]
 	if elementBP == 0 {
 		elementBP = BasisPointScale
 	}
-	amount = ScaleBasisPoints(amount, elementBP)
+	amount = maxInt64(ScaleBasisPoints(amount, elementBP), 0)
 	dealtBP, takenBP := int64(0), target.DamageTakenBP
 	if source != nil {
 		dealtBP = source.DamageDealtBP
@@ -188,7 +194,7 @@ func ResolveDamage(source, target *Combatant, input DamageInput, hooks Hooks) (D
 	if takenBP == 0 {
 		takenBP = BasisPointScale
 	}
-	amount = ScaleBasisPoints(ScaleBasisPoints(amount, dealtBP), takenBP)
+	amount = maxInt64(ScaleBasisPoints(maxInt64(ScaleBasisPoints(amount, dealtBP), 0), takenBP), 0)
 
 	criticalHook, criticalOverride := "", false
 	if hooks != nil {
@@ -203,7 +209,7 @@ func ResolveDamage(source, target *Combatant, input DamageInput, hooks Hooks) (D
 		if criticalBP == 0 {
 			criticalBP = 15000
 		}
-		amount = ScaleBasisPoints(amount, criticalBP)
+		amount = maxInt64(ScaleBasisPoints(amount, criticalBP), 0)
 		outcome.Critical = true
 		if criticalOverride {
 			outcome.CombatHooks = append(outcome.CombatHooks, criticalHook)
@@ -217,7 +223,9 @@ func ResolveDamage(source, target *Combatant, input DamageInput, hooks Hooks) (D
 		amount = target.MinimumDamage
 	}
 
-	outcome.Absorbed = minInt64(target.Shield, amount)
+	// A host-corrupted negative shield never amplifies damage: absorption is
+	// computed against the non-negative part of the pool.
+	outcome.Absorbed = minInt64(maxInt64(target.Shield, 0), amount)
 	target.Shield -= outcome.Absorbed
 	amount -= outcome.Absorbed
 	if outcome.Absorbed > 0 && hooks != nil {

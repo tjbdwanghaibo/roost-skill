@@ -20,7 +20,7 @@ import (
 	"github.com/tjbdwanghaibo/cube-core/entity"
 	"github.com/tjbdwanghaibo/cube-core/nest"
 
-	"github.com/tjbdwanghaibo/cube-skill/v2/combat"
+	"github.com/tjbdwanghaibo/roost-skill/combat"
 )
 
 // CollectionName is the default persistence collection for combat state.

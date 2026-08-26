@@ -1,6 +1,6 @@
 package skillcompose
 
-import "github.com/tjbdwanghaibo/cube-skill/v2/skillv2"
+import "github.com/tjbdwanghaibo/roost-skill/skillv2"
 
 type SkillProfile struct {
 	SkillID, GameplayDigest   string

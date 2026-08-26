@@ -130,6 +130,7 @@ type ProgramView struct {
 	Authority                 AuthorityIdentity
 	Identity                  ProgramIdentityView
 	CooldownTicks             Tick
+	GlobalCooldownTicks       Tick
 	Cast                      CastWindowView
 	Costs                     []CostView
 	GameplayTags              []GameplayTagHandle
@@ -155,6 +156,7 @@ type CastWindowView struct {
 	HasRecoveryExpression bool
 	RecoveryTicksMin      Tick
 	RecoveryTicksMax      Tick
+	Concurrent            bool
 	Movement              string
 	Turning               string
 	InterruptTags         []GameplayTagHandle

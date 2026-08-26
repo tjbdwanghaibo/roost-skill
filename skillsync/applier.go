@@ -9,7 +9,7 @@ import (
 	"sync"
 
 	"github.com/tjbdwanghaibo/cube-core/syncstream"
-	"github.com/tjbdwanghaibo/cube-skill/v2/skillv2"
+	"github.com/tjbdwanghaibo/roost-skill/skillv2"
 )
 
 var (

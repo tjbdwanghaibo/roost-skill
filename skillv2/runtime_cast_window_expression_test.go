@@ -64,3 +64,37 @@ func TestCastWindowExpressionShapeRules(t *testing.T) {
 		})
 	}
 }
+
+// Simulates an external host authoring a haste attribute with only exported
+// identifiers (ValueKindInt / QuantityBasisPoints) and scaling windup by it —
+// the exact flow that used to dead-end because the catalog kind types were
+// unexported.
+func TestExternallyAuthoredHasteAttributeDrivesWindup(t *testing.T) {
+	environment := DefaultCompileEnvironment()
+	environment.Gameplay.Attributes.Entries = append(environment.Gameplay.Attributes.Entries, AttributeCatalogEntry{
+		Handle: 40, Key: "attack_haste_bp", ValueType: ValueKindInt, Quantity: QuantityBasisPoints,
+		Readable: true, Snapshots: []string{"current"}, ModifierOperations: []string{"add"},
+		Minimum: 0, Maximum: 20000, Rounding: "toward_zero",
+	})
+	window := `{"windup_ticks_expression":{"op":"scale_bp","args":[10,{"read_attribute":{"entity":"$caster","attribute":"attack_haste_bp","snapshot":"current"}}]},` +
+		`"windup_ticks_min":2,"windup_ticks_max":10,"commit_tick":0,"recovery_ticks":0}`
+	environment.Digest = AuthorityDigest(environment)
+	program, diagnostics := Compile(mustParseJSON(t, castWindowExpressionJSON("skill.test.haste-window", window)), environment)
+	requireNoErrors(t, diagnostics)
+	host := runtimeTestHost(environment)
+	host.UpsertEntity(MemoryEntity{ID: 1, Alive: true, Health: 100, MaxHealth: 100, Attributes: map[AttributeHandle]int64{40: 6000}})
+	runtime := NewRuntime(host, RuntimeOptions{})
+	if _, err := runtime.Activate(program, CastInput{Caster: 1, Target: 2}); err != nil {
+		t.Fatal(err)
+	}
+	// 10 * 6000bp = 6 ticks of windup: no damage at tick 5, damage at tick 6.
+	if err := runtime.Advance(5); err != nil || host.HealthForTest(2) != 100 {
+		t.Fatalf("windup resolved early: health=%d err=%v", host.HealthForTest(2), err)
+	}
+	if err := runtime.Advance(6); err != nil {
+		t.Fatal(err)
+	}
+	if host.HealthForTest(2) != 90 {
+		t.Fatalf("haste-scaled windup did not execute at tick 6 (health=%d)", host.HealthForTest(2))
+	}
+}

@@ -1,4 +1,4 @@
-module github.com/tjbdwanghaibo/cube-skill/v2
+module github.com/tjbdwanghaibo/roost-skill
 
 go 1.25.0
 

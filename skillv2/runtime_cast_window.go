@@ -256,11 +256,29 @@ func (runtime *Runtime) Cancel(id CastID) error {
 	if err := runtime.stopProcesses(cast, true); err != nil {
 		return err
 	}
+	runtime.releasePolicySlot(cast)
 	cast.windowStage = CastWindowCancelled
 	cast.status = CastFinished
 	runtime.markAbilityCastFinished(cast)
 	runtime.emitCastLifecycleEvent(cast, "cast_cancelled")
 	return nil
+}
+
+// releasePolicySlot clears a policy-holding cast's activePolicies entry so a
+// cancelled or interrupted toggle/hold/charge neither blocks future
+// activations nor pins the cast in memory (castEvictableLocked refuses
+// policy-active casts). Guarded by ownership: a newer cast of the same skill
+// may already hold the slot.
+func (runtime *Runtime) releasePolicySlot(cast *castInstance) {
+	if !cast.policyActive {
+		return
+	}
+	cast.policyActive = false
+	policyKey := skillStateKey{Caster: cast.caster, Skill: cast.program.id}
+	if runtime.activePolicies[policyKey] == cast.id {
+		delete(runtime.activePolicies, policyKey)
+		runtime.touchActivePolicyLocked(policyKey)
+	}
 }
 
 func (runtime *Runtime) Interrupt(id CastID, tag GameplayTagHandle) error {
@@ -284,6 +302,7 @@ func (runtime *Runtime) Interrupt(id CastID, tag GameplayTagHandle) error {
 	if err := runtime.stopProcesses(cast, true); err != nil {
 		return err
 	}
+	runtime.releasePolicySlot(cast)
 	cast.windowStage = CastWindowCancelled
 	cast.status = CastFinished
 	runtime.markAbilityCastFinished(cast)
@@ -400,6 +419,15 @@ func (runtime *Runtime) executeAmmoRecharge(task *ammoRechargeTask) error {
 	runtime.touchSkillResourceLocked(skillStateKey{Caster: task.Caster, Skill: task.Skill})
 	if state.stock < state.maxStock {
 		state.stock++
+	}
+	// Keep the ability's snapshot-visible ammo cache in step with the
+	// authoritative stock, as a recorded write point: without this, clients
+	// polling ability state would not see recharges until the next commit.
+	if handle, ok := runtime.abilityByProgram[skillStateKey{Caster: task.Caster, Skill: task.Skill}]; ok {
+		if ability := runtime.abilities[abilityKey{owner: task.Caster, handle: handle}]; ability != nil {
+			ability.ammoStock, ability.ammoMax = state.stock, state.maxStock
+			runtime.touchAbilityLocked(abilityKey{owner: task.Caster, handle: handle})
+		}
 	}
 	if state.stock >= state.maxStock {
 		state.rechargeScheduled = false

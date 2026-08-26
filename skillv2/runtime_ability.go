@@ -254,14 +254,23 @@ func (runtime *Runtime) readAbilityStateLocked(owner EntityID, ability AbilityHa
 	case "cooldown_total_ticks":
 		return IntRuntimeValue(int64(state.cooldownTotal), quantityTicks), nil
 	case "ammo_stock":
+		// Pure read: the authoritative stock lives in skillStates. Writing it
+		// back into the ability cache here would mutate snapshot-visible
+		// state on a read path without a write point, silently diverging the
+		// incremental mutation baseline (the cache itself is synchronized at
+		// recharge and commit time).
 		if state.program.cast.mode == castModeAmmo {
-			ammo := runtime.skillStates[skillStateKey{Caster: owner, Skill: state.program.id}]
-			if ammo != nil {
-				state.ammoStock, state.ammoMax = ammo.stock, ammo.maxStock
+			if ammo := runtime.skillStates[skillStateKey{Caster: owner, Skill: state.program.id}]; ammo != nil {
+				return IntRuntimeValue(ammo.stock, quantityCount), nil
 			}
 		}
 		return IntRuntimeValue(state.ammoStock, quantityCount), nil
 	case "ammo_max_stock":
+		if state.program.cast.mode == castModeAmmo {
+			if ammo := runtime.skillStates[skillStateKey{Caster: owner, Skill: state.program.id}]; ammo != nil {
+				return IntRuntimeValue(ammo.maxStock, quantityCount), nil
+			}
+		}
 		return IntRuntimeValue(state.ammoMax, quantityCount), nil
 	case "enabled":
 		return BoolRuntimeValue(len(state.overlays) == 0), nil

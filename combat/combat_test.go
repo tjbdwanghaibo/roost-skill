@@ -252,3 +252,26 @@ func TestSaturatingMathAtInt64Extremes(t *testing.T) {
 		t.Fatalf("scale = %d", got)
 	}
 }
+
+func TestResolveDamageClampsNegativeRatesAndShield(t *testing.T) {
+	// Regression: a "damage taken" debuff stacked below -10000 used to make
+	// Absorbed negative — being hit granted shield.
+	target := &Combatant{Alive: true, Health: 100, MaxHealth: 100, Shield: 5, DamageTakenBP: -8000}
+	outcome, _ := ResolveDamage(nil, target, DamageInput{Amount: 50}, nil)
+	if outcome.Absorbed != 0 || outcome.HealthDamage != 0 || target.Shield != 5 || target.Health != 100 {
+		t.Fatalf("negative taken rate leaked: %+v target=%+v", outcome, target)
+	}
+	// Regression: a negative shield pool used to amplify damage severalfold.
+	target = &Combatant{Alive: true, Health: 100, MaxHealth: 100, Shield: -40}
+	outcome, _ = ResolveDamage(nil, target, DamageInput{Amount: 10}, nil)
+	if outcome.Absorbed != 0 || outcome.HealthDamage != 10 || target.Shield != -40 {
+		t.Fatalf("negative shield amplified damage: %+v target=%+v", outcome, target)
+	}
+	// Negative dealt rate and negative critical multiplier clamp the same way.
+	source := &Combatant{Alive: true, Health: 10, MaxHealth: 10, DamageDealtBP: -100, ForceCritical: true, CriticalMultiplierBP: -5000}
+	target = &Combatant{Alive: true, Health: 100, MaxHealth: 100}
+	outcome, _ = ResolveDamage(source, target, DamageInput{Amount: 50, CanCritical: true}, nil)
+	if outcome.HealthDamage != 0 || target.Health != 100 {
+		t.Fatalf("negative dealt/critical rates leaked: %+v", outcome)
+	}
+}

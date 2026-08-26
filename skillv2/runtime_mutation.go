@@ -630,9 +630,9 @@ func diffPersistentStates(result []StateMutation, before, after []PersistentStat
 			result = append(result, StateMutation{Kind: StateMutationPersistentUpsert, StateHandle: value.Handle, Binding: value.Binding, Persistent: &copyValue})
 		}
 	}
-	for key := range beforePersistent {
-		if _, ok := afterPersistent[key]; !ok {
-			result = append(result, StateMutation{Kind: StateMutationPersistentRemove, StateHandle: key.handle, Binding: key.binding})
+	for _, value := range before {
+		if _, ok := afterPersistent[persistentKey{value.Handle, value.Binding}]; !ok {
+			result = append(result, StateMutation{Kind: StateMutationPersistentRemove, StateHandle: value.Handle, Binding: value.Binding})
 		}
 	}
 	return result
@@ -670,7 +670,10 @@ func abilityStateEqualIgnoringClock(left, right AbilityStateSnapshot) bool {
 }
 
 func mutationSortKey(value StateMutation) string {
-	return string(value.Kind) + ":" + value.ProgramID + ":" + formatMutationID(uint64(value.CastID), uint64(value.Caster), uint64(value.Owner), uint64(value.AbilityHandle), uint64(value.ProcessID), uint64(value.Binding.Owner), uint64(value.Binding.Subject), value.Binding.Team)
+	// Every identity field a mutation kind can carry must be part of this
+	// key: two distinct mutations with equal keys would leave their relative
+	// order to map iteration, breaking cross-run sequence determinism.
+	return string(value.Kind) + ":" + value.ProgramID + ":" + value.StateHandle.GameplayDigest + ":" + formatMutationID(uint64(value.CastID), uint64(value.Caster), uint64(value.Owner), uint64(value.AbilityHandle), uint64(value.ProcessID), uint64(value.StateHandle.Slot), uint64(value.StateHandle.Shared), uint64(value.Binding.Owner), uint64(value.Binding.Subject), value.Binding.Team)
 }
 
 func formatMutationID(values ...uint64) string {

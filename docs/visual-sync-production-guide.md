@@ -1,6 +1,6 @@
 # Skill v2 Visual 与数据同步生产指南
 
-本文描述当前 `cube-skill`、`cube-core`、`cube-kit` 三仓实现的正式边界、接入顺序、
+本文描述当前 `roost-skill`、`cube-core`、`cube-kit` 三仓实现的正式边界、接入顺序、
 恢复语义、运行指标和发布门槛。它既是学习入口，也是生产接入检查表。
 
 ## 1. 最终能力边界
@@ -27,7 +27,7 @@ client skillsync.Applier ◀─────────────────�
 | 仓库 | 正式职责 | 明确不负责 |
 | --- | --- | --- |
 | `cube-core` | 通用有序流、ACK、有限历史、全量恢复、持久化表示、指标 | Skill payload、NATS、可见性规则 |
-| `cube-skill` | DSL/Runtime、视觉契约、状态快照、强类型记录、服务端协调器、客户端应用器 | 引擎资源路径、具体消息中间件 |
+| `roost-skill` | DSL/Runtime、视觉契约、状态快照、强类型记录、服务端协调器、客户端应用器 | 引擎资源路径、具体消息中间件 |
 | `cube-kit` | Packet 与 SyncMsg 的严格适配、observer 防串流、负载上限、有界发布队列 | 解释 Skill 状态或视觉语义 |
 
 具体游戏负责实现生产 `Host`、observer 可见性策略、视觉资产目录解析器、History
@@ -222,7 +222,7 @@ sequence、source sequence 和 resync reason，但不要记录完整敏感 paylo
 发布顺序固定：
 
 1. 发布含新 syncstream 的 `cube-core`；
-2. `cube-skill` 升级到正式 core 版本并移除本地 replace，再发布；
+2. `roost-skill` 升级到正式 core 版本并移除本地 replace，再发布；
 3. `cube-kit` 升级 core 版本并移除本地 replace，再发布；
 4. 游戏服务接入 Coordinator/visibility/history store；
 5. 客户端先支持新 schema 和 manifest catalog，再启用服务端流量。
@@ -242,7 +242,7 @@ go test ./syncstream -count=1
 go vet ./syncstream
 go test -race ./syncstream -count=1
 
-# cube-skill
+# roost-skill
 go test ./skillv2 ./skillcompose ./skillsync -count=1
 go vet ./skillv2 ./skillcompose ./skillsync
 go test -race ./skillv2 ./skillcompose ./skillsync -count=1
@@ -340,10 +340,10 @@ go test -race ./... -count=1
 
 # 基准
 go test ./syncstream -run '^$' -bench . -benchmem       # cube-core / cube-kit
-go test ./skillv2 -run '^$' -bench . -benchmem          # cube-skill
+go test ./skillv2 -run '^$' -bench . -benchmem          # roost-skill
 
 # 跨模块：确认失败 -> 重启 -> WAL/outbox 恢复 -> gzip/分片/checksum -> ACK/裁剪
-cd cube-skill/integration/sync-e2e
+cd roost-skill/integration/sync-e2e
 go test ./... -count=1
 
 # 发布前 30 分钟 soak（可先用 5s 验证任务配置）
@@ -352,8 +352,8 @@ $env:CUBE_SYNC_SOAK_DURATION='30m'
 go test ./... -run TestProtocolSoak -count=1 -timeout 35m
 ```
 
-发布顺序为 `cube-core v1.3.0 → cube-skill v2.0.0 → cube-kit v1.1.0 → 业务服务/客户端`。
-`cube-skill` 的模块路径是 `github.com/tjbdwanghaibo/cube-skill/v2`。生产模块只依赖
+发布顺序为 `cube-core v1.6.2 → roost-skill v1.5.0+ → cube-kit v1.6.1 → 业务服务/客户端`。
+`roost-skill` 的模块路径是 `github.com/tjbdwanghaibo/roost-skill`。生产模块只依赖
 语义版本；相对 `replace` 仅存在于 `integration/sync-e2e` 测试模块。正式发布 tag 前应先用
 临时 workspace 执行三仓全量测试，然后在无 workspace 环境验证已发布版本可解析。
 

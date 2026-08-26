@@ -11,7 +11,7 @@ import (
 	"github.com/tjbdwanghaibo/cube-core/entity"
 	"github.com/tjbdwanghaibo/cube-core/nest"
 
-	"github.com/tjbdwanghaibo/cube-skill/v2/combat"
+	"github.com/tjbdwanghaibo/roost-skill/combat"
 )
 
 const combatTestKind entity.EntityKind = 246

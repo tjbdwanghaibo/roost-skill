@@ -18,7 +18,13 @@ var (
 	ErrCastInputRejected        = errors.New("skillv2: cast does not accept gameplay input in its current state")
 )
 
-const supportedCompilerSemanticsRevision = "skillv2-compiler-1"
+// supportedCompilerSemanticsRevision gates programs and checkpoints to one
+// compiler generation. Bumped to 2 for the v1.4/v1.5 semantics additions
+// (cast exclusivity, global cooldown, window-tick expressions): they change
+// every gameplay digest, so older programs, checkpoints, and composition
+// contracts must be recompiled/rebuilt rather than silently failing digest
+// resolution. See docs/skill-casting-and-combat.md for the migration note.
+const supportedCompilerSemanticsRevision = "skillv2-compiler-2"
 
 type RuntimeOptions struct {
 	MatchSeed                          [32]byte

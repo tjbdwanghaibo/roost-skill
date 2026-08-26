@@ -3,7 +3,7 @@ package skillcompose
 import (
 	"testing"
 
-	"github.com/tjbdwanghaibo/cube-skill/v2/skillv2"
+	"github.com/tjbdwanghaibo/roost-skill/skillv2"
 )
 
 func TestValidateCandidateRejectsUngrantableGrowthAndDisconnectedFlow(t *testing.T) {

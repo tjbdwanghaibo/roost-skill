@@ -8,6 +8,15 @@ func (ir *skillIR) walkValues(visitor valueVisitor) {
 	for _, cost := range ir.costs {
 		walkValue(cost.amount, visitor)
 	}
+	if ir.activation.castWindow.hasWindupExpression {
+		walkValue(ir.activation.castWindow.windupExpression, visitor)
+	}
+	if ir.activation.castWindow.hasRecoveryExpression {
+		walkValue(ir.activation.castWindow.recoveryExpression, visitor)
+	}
+	for _, cost := range ir.activation.policy.sustainCosts {
+		walkValue(cost.amount, visitor)
+	}
 	for _, declaration := range ir.memory {
 		walkValue(declaration.defaultValue, visitor)
 	}

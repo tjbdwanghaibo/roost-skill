@@ -1,4 +1,4 @@
-# cube-skill v2 破坏性升级手册
+# roost-skill v2 破坏性升级手册
 
 本手册是 v1 升级到 v2 的唯一生产迁移路径。v2 不保留双读、兼容别名或静默降级；旧数据
 被拒绝时必须先排空或显式转换，不能删除校验绕过启动失败。
@@ -8,14 +8,14 @@
 v2 的 Go 模块路径已改为：
 
 ```go
-github.com/tjbdwanghaibo/cube-skill/v2
+github.com/tjbdwanghaibo/roost-skill
 ```
 
 所有 import 必须带 `/v2`。发布和部署基线为：
 
-- `cube-core v1.3.0`；
-- `cube-kit v1.1.0`；
-- `cube-skill v2.0.0`。
+- `cube-core v1.6.2`；
+- `cube-kit v1.6.1`；
+- `roost-skill v2.0.0`。
 
 禁止在生产 `go.mod` 中使用本地 `replace`。仓库内的 replace 只允许存在于
 `integration/sync-e2e` 测试模块。

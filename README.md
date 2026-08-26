@@ -1,13 +1,16 @@
-# cube-skill
+# roost-skill
 
-Current release line: **v2**. This is a breaking production upgrade and uses
-the Go module path `github.com/tjbdwanghaibo/cube-skill/v2`. Read the
+Current wire/semantics line: **v2** (the `skillv2` package). The Go module
+path is `github.com/tjbdwanghaibo/roost-skill` (module versions follow the
+repository's v1.x tag line). Read the
 [v2 breaking-upgrade runbook](docs/breaking-upgrade-v2.md) before deployment;
 v1 checkpoint, outbox, and composition-contract files are not accepted.
 
 Production deployment and release gates: [docs/production-readiness.md](docs/production-readiness.md).
+Casting semantics (exclusivity, global cooldown, window expressions) and the
+combat batteries: [docs/skill-casting-and-combat.md](docs/skill-casting-and-combat.md).
 
-`cube-skill` is the reusable skill compiler and authoritative runtime shared by
+`roost-skill` is the reusable skill compiler and authoritative runtime shared by
 Cube applications. It has no dependency on a concrete game server, renderer,
 or transport.
 
@@ -33,7 +36,7 @@ Clients consume `PresentationPlan` once per program identity and incremental
 
 ## Scope
 
-`cube-skill` is a **2D authoritative combat runtime**. The following are
+`roost-skill` is a **2D authoritative combat runtime**. The following are
 deliberate non-goals, not gaps:
 
 - **No third axis.** Positions are 2D fixed-point world coordinates. Height,

@@ -1,4 +1,4 @@
-# cube-skill 架构、迁移与同步流程
+# roost-skill 架构、迁移与同步流程
 
 ## 1. 模块边界
 
@@ -8,10 +8,10 @@
 cube-core/syncstream
         ^
         |
-cube-skill/skillsync       cube-kit/syncstream
+roost-skill/skillsync       cube-kit/syncstream
         ^                         ^
         |                         |
-cube-skill/skillv2        cube-core/sync.ISyncBus
+roost-skill/skillv2        cube-core/sync.ISyncBus
         ^                         ^
         |                         |
      game host                 NATS / JetStream
@@ -21,9 +21,9 @@ cube-skill/skillv2        cube-core/sync.ISyncBus
   自动全量恢复、持久化表示和指标，不知道技能、实体渲染或 NATS。
 - `cube-kit/syncstream`：把 Packet 编码为现有 `sync.SyncMsg`，复用 NATS 或
   JetStream；不解释技能 Payload。
-- `cube-skill/skillv2`：编译和执行权威技能逻辑，产生不可变 PresentationPlan、
+- `roost-skill/skillv2`：编译和执行权威技能逻辑，产生不可变 PresentationPlan、
   有序 PresentationEvent、RuntimeStateSnapshot 和强类型 StateEvent。
-- `cube-skill/skillsync`：定义技能 Manifest、状态全量/增量、表现事件的 JSON
+- `roost-skill/skillsync`：定义技能 Manifest、状态全量/增量、表现事件的 JSON
   记录，提供服务端 Coordinator 和客户端 Applier。
 - 具体游戏：实现 `skillv2.Host`、决定 Observer 可见范围、生成状态快照、选择
   NATS 或 JetStream、处理断线重连。
@@ -82,17 +82,17 @@ cast commit 后产生。因此客户端永远不会先看到一个被权威层�
 
 这是三个仓库的原子设计变更，但版本发布必须按依赖方向进行：
 
-1. 发布 `cube-core v1.3.0`（包含 `syncstream`）。
-2. 发布 Go 模块 `github.com/tjbdwanghaibo/cube-skill/v2` 的 `cube-skill v2.0.0`。
-3. 发布/确认 `cube-kit v1.1.0` transport adapter。
-4. 具体游戏升级 cube-skill/cube-kit，替换旧导入路径：
+1. 发布 `cube-core v1.6.2`（包含 `syncstream`）。
+2. 发布 Go 模块 `github.com/tjbdwanghaibo/roost-skill`（v1.5.0 起模块路径与仓库名一致，可直接 go get；wire/语义版本线仍为 skillv2）。
+3. 发布/确认 `cube-kit v1.6.1` transport adapter。
+4. 具体游戏升级 roost-skill/cube-kit，替换旧导入路径：
 
 ```text
 github.com/tjbdwanghaibo/cube/game/gameplay/skillv2
-=> github.com/tjbdwanghaibo/cube-skill/v2/skillv2
+=> github.com/tjbdwanghaibo/roost-skill/skillv2
 
 github.com/tjbdwanghaibo/cube/game/gameplay/skillcompose
-=> github.com/tjbdwanghaibo/cube-skill/v2/skillcompose
+=> github.com/tjbdwanghaibo/roost-skill/skillcompose
 ```
 
 该版本是持久化和 API 的破坏性升级，不能直接滚动复用 v1 outbox/checkpoint。停服排空、
@@ -107,7 +107,7 @@ github.com/tjbdwanghaibo/cube/game/gameplay/skillcompose
 ```powershell
 go test ./syncstream -count=1                         # cube-core
 go test ./syncstream -count=1                         # cube-kit
-go test ./skillv2 ./skillcompose ./skillsync -count=1 # cube-skill
+go test ./skillv2 ./skillcompose ./skillsync -count=1 # roost-skill
 ```
 
 ### 6.2 跨模块工作区
@@ -119,7 +119,7 @@ go 1.25.0
 use (
     ./cube-core
     ./cube-kit
-    ./cube-skill
+    ./roost-skill
 )
 ```
 
@@ -128,7 +128,7 @@ use (
 ```powershell
 go test ./...           # cube-core
 go test ./syncstream    # cube-kit adapter
-go test ./...           # cube-skill
+go test ./...           # roost-skill
 go vet ./...            # 三个模块分别运行
 go test -race ./...     # 三个模块分别运行
 ```
@@ -153,5 +153,5 @@ go test -race ./...     # 三个模块分别运行
 ### 6.4 验收门槛
 
 发布前必须同时满足：所有 fixture、普通测试、vet、race 通过；仓库中不存在旧
-导入路径；cube-core 不导入 cube-skill/cube-kit；cube-skill 不导入具体游戏；
+导入路径；cube-core 不导入 roost-skill/cube-kit；roost-skill 不导入具体游戏；
 cube-kit adapter 不导入 skillv2。

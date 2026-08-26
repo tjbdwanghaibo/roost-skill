@@ -2,10 +2,11 @@ package combatcomponent
 
 import (
 	"fmt"
+	"math"
 
-	skillv2 "github.com/tjbdwanghaibo/cube-skill/v2/skillv2"
+	"github.com/tjbdwanghaibo/roost-skill/skillv2"
 
-	"github.com/tjbdwanghaibo/cube-skill/v2/combat"
+	"github.com/tjbdwanghaibo/roost-skill/combat"
 )
 
 // Resolver locates the combat component for a skillv2 entity id. The entity
@@ -203,6 +204,9 @@ func (adapter *HostAdapter) PayCosts(payment skillv2.CostPayment) (skillv2.Commi
 		}
 		if _, seen := totals[attribute]; !seen {
 			order = append(order, attribute)
+		}
+		if totals[attribute] > math.MaxInt64-entry.Amount {
+			return skillv2.CommitReceipt{}, fmt.Errorf("combatcomponent: cost total overflows")
 		}
 		totals[attribute] += entry.Amount
 	}

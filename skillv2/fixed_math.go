@@ -87,7 +87,7 @@ func integerDistance(left, right Position) int64 {
 func integerDistanceSaturated(left, right Position) (int64, bool) {
 	dx := absDeltaUint64(right.X, left.X)
 	dy := absDeltaUint64(right.Y, left.Y)
-	const fastLimit = 3037000499 // floor(sqrt(MaxInt64/2)): dx²+dy² fits uint64
+	const fastLimit = 3037000499 // floor(sqrt(MaxInt64)): 2·fastLimit² < 2⁶⁴, so dx²+dy² fits uint64
 	if dx <= fastLimit && dy <= fastLimit {
 		squared := dx*dx + dy*dy
 		root := isqrt64(squared)

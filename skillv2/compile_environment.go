@@ -304,7 +304,7 @@ type CompileEnvironment struct {
 
 func DefaultCompileEnvironment() CompileEnvironment {
 	environment := CompileEnvironment{
-		CompilerSemanticsRevision: "skillv2-compiler-1", Revision: "gameplay-default-1",
+		CompilerSemanticsRevision: "skillv2-compiler-2", Revision: "gameplay-default-1",
 		Limits: defaultCompileLimits(), Numeric: NumericAuthority{WorldDistanceScale: 1000, MillidegreesPerDegree: 1000, BasisPointsScale: 10000, SignedIntegerBits: 64, TickUnit: "logical_tick", DefaultRounding: "half_away_from_zero"},
 		Gameplay: defaultGameplayCatalog(), Motion: defaultMotionCapabilityCatalog(), ProcessProperties: defaultProcessPropertyCatalog(), Visual: defaultVisualCatalog(),
 	}
