@@ -5,7 +5,7 @@
 ## [Unreleased]
 
 ### Changed
-- 依赖升级：cube-core v1.6.4、（e2e）cube-kit v1.7.1；docs 中版本引用同步，并新增 CI 门禁"docs versions match go.mod"防再次漂移。
+- 依赖升级：`cube-core` → v1.8.0，（e2e）`cube-kit` → v1.8.0（lockstep 两层 + configdata 管线与两轮复审修复）；docs 版本引用同步（CI 门禁"docs versions match go.mod"），全量测试与 sync-e2e 在新版本上通过。skillv2 运行时的确定性契约（定点/注入随机/无墙钟）正是 core lockstep 客户端模拟的前提，两侧现已同版本对齐。
 
 ### Added
 - `combatcomponent.StatusBridge`：skillv2 的 status 域效果命令（Status/RemoveStatus/DispelStatus/AttributeModifier）按 status catalog 标准化落到 combat 容器，事件词表与 MemoryHost 一致；挂 `HostAdapter.Status` 后由 Apply 自动分发。有意差异：mul_bp 修饰加性叠加（非 MemoryHost 乘性链），见 docs/skill-casting-and-combat.md。

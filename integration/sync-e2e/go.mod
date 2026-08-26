@@ -3,8 +3,8 @@ module github.com/tjbdwanghaibo/roost-skill/integration/sync-e2e
 go 1.25.0
 
 require (
-	github.com/tjbdwanghaibo/cube-core v1.6.4
-	github.com/tjbdwanghaibo/cube-kit v1.7.1
+	github.com/tjbdwanghaibo/cube-core v1.8.0
+	github.com/tjbdwanghaibo/cube-kit v1.8.0
 	github.com/tjbdwanghaibo/roost-skill v1.4.0
 )
 
