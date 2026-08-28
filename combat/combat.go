@@ -1,4 +1,4 @@
-// Package combat is the reusable combat content battery for cube-skill
+// Package combat is the reusable combat content battery for roost-skill
 // hosts: attribute sets, buff containers, and the twelve-stage damage
 // pipeline, all in deterministic fixed-point integer math (amounts in raw
 // units, rates in basis points where 10000 = 100%).
