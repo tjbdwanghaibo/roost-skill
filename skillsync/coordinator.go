@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/cube-core/syncstream"
-	"github.com/tjbdwanghaibo/roost-skill/skillv2"
+	"github.com/tjbdwanghaibo/roost-skill/skill"
 )
 
 var (
@@ -26,25 +26,25 @@ var (
 type PacketPublisher interface{ Publish(syncstream.Packet) error }
 
 type VisibilityPolicy interface {
-	FilterStateSnapshot(syncstream.Observer, skillv2.RuntimeStateSnapshot) (skillv2.RuntimeStateSnapshot, error)
-	FilterStateMutation(syncstream.Observer, skillv2.StateMutation) (skillv2.StateMutation, bool, error)
-	FilterPresentation(syncstream.Observer, skillv2.PresentationEvent) (skillv2.PresentationEvent, bool, error)
+	FilterStateSnapshot(syncstream.Observer, skill.RuntimeStateSnapshot) (skill.RuntimeStateSnapshot, error)
+	FilterStateMutation(syncstream.Observer, skill.StateMutation) (skill.StateMutation, bool, error)
+	FilterPresentation(syncstream.Observer, skill.PresentationEvent) (skill.PresentationEvent, bool, error)
 }
 
 type AllowAllVisibility struct{}
 
-func (AllowAllVisibility) FilterStateSnapshot(_ syncstream.Observer, snapshot skillv2.RuntimeStateSnapshot) (skillv2.RuntimeStateSnapshot, error) {
+func (AllowAllVisibility) FilterStateSnapshot(_ syncstream.Observer, snapshot skill.RuntimeStateSnapshot) (skill.RuntimeStateSnapshot, error) {
 	return snapshot, nil
 }
-func (AllowAllVisibility) FilterStateMutation(_ syncstream.Observer, mutation skillv2.StateMutation) (skillv2.StateMutation, bool, error) {
+func (AllowAllVisibility) FilterStateMutation(_ syncstream.Observer, mutation skill.StateMutation) (skill.StateMutation, bool, error) {
 	return mutation, true, nil
 }
-func (AllowAllVisibility) FilterPresentation(_ syncstream.Observer, event skillv2.PresentationEvent) (skillv2.PresentationEvent, bool, error) {
+func (AllowAllVisibility) FilterPresentation(_ syncstream.Observer, event skill.PresentationEvent) (skill.PresentationEvent, bool, error) {
 	return event, true, nil
 }
 
 type CoordinatorOptions struct {
-	Runtime              *skillv2.Runtime
+	Runtime              *skill.Runtime
 	History              *syncstream.History
 	Publisher            PacketPublisher
 	Projector            Projector
@@ -88,7 +88,7 @@ type coordinatorCounters struct {
 // global mutex while invoking VisibilityPolicy, PacketPublisher, or Runtime.
 type Coordinator struct {
 	mutex            sync.RWMutex
-	runtime          *skillv2.Runtime
+	runtime          *skill.Runtime
 	history          *syncstream.History
 	publisher        PacketPublisher
 	projector        Projector
@@ -96,7 +96,7 @@ type Coordinator struct {
 	outbox           *Outbox
 	maxPackets       int
 	cursors          map[observerKey]sourceCursor
-	plans            map[int64]skillv2.PresentationPlan
+	plans            map[int64]skill.PresentationPlan
 	viewLocks        map[observerKey]*viewLockEntry
 	closedObservers  map[syncstream.Observer]struct{}
 	closingObservers map[syncstream.Observer]struct{}
@@ -134,7 +134,7 @@ func NewCoordinator(options CoordinatorOptions) (*Coordinator, error) {
 	if err := options.Outbox.Reconcile(options.History.Export()); err != nil {
 		return nil, err
 	}
-	return &Coordinator{runtime: options.Runtime, history: options.History, publisher: options.Publisher, projector: options.Projector, visibility: options.Visibility, outbox: options.Outbox, maxPackets: options.MaxPacketsPerFlush, cursors: make(map[observerKey]sourceCursor), plans: make(map[int64]skillv2.PresentationPlan), viewLocks: make(map[observerKey]*viewLockEntry), closedObservers: make(map[syncstream.Observer]struct{}), closingObservers: make(map[syncstream.Observer]struct{})}, nil
+	return &Coordinator{runtime: options.Runtime, history: options.History, publisher: options.Publisher, projector: options.Projector, visibility: options.Visibility, outbox: options.Outbox, maxPackets: options.MaxPacketsPerFlush, cursors: make(map[observerKey]sourceCursor), plans: make(map[int64]skill.PresentationPlan), viewLocks: make(map[observerKey]*viewLockEntry), closedObservers: make(map[syncstream.Observer]struct{}), closingObservers: make(map[syncstream.Observer]struct{})}, nil
 }
 
 func (coordinator *Coordinator) acquireView(key observerKey) (func(), error) {
@@ -177,13 +177,13 @@ func (coordinator *Coordinator) OpenObserver(observer syncstream.Observer) error
 	return nil
 }
 
-func (coordinator *Coordinator) RegisterProgram(key int64, program *skillv2.Program) {
+func (coordinator *Coordinator) RegisterProgram(key int64, program *skill.Program) {
 	coordinator.mutex.Lock()
-	coordinator.plans[key] = skillv2.InspectPresentationPlan(program)
+	coordinator.plans[key] = skill.InspectPresentationPlan(program)
 	coordinator.mutex.Unlock()
 }
 
-func (coordinator *Coordinator) plan(key int64) (skillv2.PresentationPlan, bool) {
+func (coordinator *Coordinator) plan(key int64) (skill.PresentationPlan, bool) {
 	coordinator.mutex.RLock()
 	defer coordinator.mutex.RUnlock()
 	plan, ok := coordinator.plans[key]

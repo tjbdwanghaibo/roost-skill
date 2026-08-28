@@ -5,16 +5,18 @@
 ## [Unreleased]
 
 ### Changed
-- 依赖升级：`cube-core` → v1.8.0，（e2e）`cube-kit` → v1.8.0（lockstep 两层 + configdata 管线与两轮复审修复）；docs 版本引用同步（CI 门禁"docs versions match go.mod"），全量测试与 sync-e2e 在新版本上通过。skillv2 运行时的确定性契约（定点/注入随机/无墙钟）正是 core lockstep 客户端模拟的前提，两侧现已同版本对齐。
+- 核心 Go API 从 `/skillv2` 收敛为唯一稳定包 `/skill`，不保留双包兼容层；JSON schema `cube.skill/v2`、compiler semantics `skillv2-compiler-2` 和现有 checkpoint/wire 格式保持不变。仓库内消费者、示例、CI、codegen 接线和文档全部迁移。
+- 依赖升级：`cube-core` → v1.8.0，（e2e）`cube-kit` → v1.8.0（lockstep 两层 + configdata 管线与两轮复审修复）；docs 版本引用同步（CI 门禁"docs versions match go.mod"），全量测试与 sync-e2e 在新版本上通过。skill 运行时的确定性契约（定点/注入随机/无墙钟）正是 core lockstep 客户端模拟的前提，两侧现已同版本对齐。
 
 ### Added
-- `combatcomponent.StatusBridge`：skillv2 的 status 域效果命令（Status/RemoveStatus/DispelStatus/AttributeModifier）按 status catalog 标准化落到 combat 容器，事件词表与 MemoryHost 一致；挂 `HostAdapter.Status` 后由 Apply 自动分发。有意差异：mul_bp 修饰加性叠加（非 MemoryHost 乘性链），见 docs/skill-casting-and-combat.md。
+- `combatcomponent.StatusBridge`：skill 的 status 域效果命令（Status/RemoveStatus/DispelStatus/AttributeModifier）按 status catalog 标准化落到 combat 容器，事件词表与 MemoryHost 一致；挂 `HostAdapter.Status` 后由 Apply 自动分发。有意差异：mul_bp 修饰加性叠加（非 MemoryHost 乘性链），见 docs/skill-casting-and-combat.md。
 - `HostAdapter` 支持 `ResourceCommand`（set/add/spend 语义对齐 MemoryHost：spend 原子校验、no-op 不推进 revision）。
 - `combat.ChanceRoll`/`RollValue`：HMAC 确定性掷点（暴击/闪避概率 → 事实），推荐以效果命令 Event 坐标为掷点坐标。
 - `combat.BuffContainer` 新增 `BuffIndependent` 叠加策略（同 ID 独立实例独立计时）与 `BuffSpec.MaxDurationTicks`（韧性缩放后的时长上限）；`CombatComponent.RemoveBuff`。
 - `examples/`：三个可运行工程（combat 电池、fireball 全链路、statusbridge + 掷点）。
 - docs：skill-casting-and-combat.md 补 StatusBridge/掷点章节；AI 作者提示词补 concurrent/GCD/窗口表达式语法。
-- `StatusBridge` 支持 `ModifyStatusInstanceCommand`（实例句柄级偷取/转移/复制/层数/时长操作，授权矩阵照搬 MemoryHost）；实例寻址契约：opaque id = `combat.BuffInstanceID`。`combat.BuffContainer` 新增 `SetStacks`/`SetDueTick`/`Adopt`；导出 `skillv2.NewStatusInstanceID`（外部宿主此前无法构造实例句柄）。
+- docs：新增按角色组织的导航、稳定 API 接入说明和 `/skillv2` → `/skill` 迁移手册；修复失效链接、错误的 module major 发布说明和过期测试基线。
+- `StatusBridge` 支持 `ModifyStatusInstanceCommand`（实例句柄级偷取/转移/复制/层数/时长操作，授权矩阵照搬 MemoryHost）；实例寻址契约：opaque id = `combat.BuffInstanceID`。`combat.BuffContainer` 新增 `SetStacks`/`SetDueTick`/`Adopt`；导出 `skill.NewStatusInstanceID`（外部宿主此前无法构造实例句柄）。
 
 ### Fixed
 - `RestoreRuntime` 不再经由新建路径压缩宿主事件队列——旧行为在校验之前就把 checkpoint 之后的事件 compact 掉（即使 restore 被拒绝）；`HostEventCompactor` 文档明确保留契约（必须保留最后一次成功 checkpoint 以来的全部事件）。

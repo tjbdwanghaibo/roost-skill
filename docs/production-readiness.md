@@ -1,11 +1,12 @@
-# roost-skill v2 production baseline
+# roost-skill 生产基线
 
-This document defines the supported production path for `skillv2`,
+This document defines the supported production path for `skill`,
 `skillcompose`, and `skillsync`. Legacy checkpoint and packet-only outbox files
 are intentionally rejected; migrate by draining the old runtime/outbox before
 deploying this version. Follow the
-[v2 breaking-upgrade runbook](breaking-upgrade-v2.md); this module is published
-as `github.com/tjbdwanghaibo/roost-skill` and must not be tagged as v1.x.
+[stable package migration runbook](breaking-upgrade-skill-package.md). The Go
+module is `github.com/tjbdwanghaibo/roost-skill` and therefore follows normal
+v1.x semantic-version tags; the wire schema version is independent.
 
 ## Runtime limits
 
@@ -81,11 +82,12 @@ go mod verify
 go vet ./...
 go test ./... -count=1
 go test -race ./... -count=1
-go test ./skillv2 -run ^$ -fuzz FuzzParseGeneratedNeverPanics -fuzztime 30s
-go test ./skillv2 -run ^$ -fuzz FuzzRestoreRuntimeCheckpointNeverPanics -fuzztime 30s
+go test ./skill -run ^$ -fuzz FuzzParseGeneratedNeverPanics -fuzztime 30s
+go test ./skill -run ^$ -fuzz FuzzRestoreRuntimeCheckpointNeverPanics -fuzztime 30s
 go test ./... -run ^$ -bench . -benchmem -count=3
 ```
 
-Also run `integration/sync-e2e` with the exact core/kit tags selected for the
-release. The repository CI uses core `v1.6.2` and kit `v1.6.1` as its published
-compatibility baseline.
+Also run `integration/sync-e2e` and the `examples` module with the exact
+core/kit/skill tags selected for the release. The repository CI and nested
+module `go.mod` files are the authoritative compatibility baseline; their
+versions must be updated together and must not rely on an uncommitted go.work.

@@ -3,11 +3,11 @@ package skillcompose
 import (
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-skill/skillv2"
+	"github.com/tjbdwanghaibo/roost-skill/skill"
 )
 
 func TestValidateCandidateRejectsUngrantableGrowthAndDisconnectedFlow(t *testing.T) {
-	authority := skillv2.AuthorityIdentity{Revision: "r", Digest: "d"}
+	authority := skill.AuthorityIdentity{Revision: "r", Digest: "d"}
 	contract, err := BuildContract([]SkillProfile{{SkillID: "a", GameplayDigest: "source", Authority: authority, Features: []FeatureKey{"effect.damage"}, Metrics: Metrics{Targets: 1, Processes: 1, Mutations: 1, LifetimeTicks: 1}}}, authority, CompositionPolicy{ID: "p"}, CallerPolicy{})
 	if err != nil {
 		t.Fatal(err)
@@ -26,7 +26,7 @@ func TestValidateCandidateRejectsUngrantableGrowthAndDisconnectedFlow(t *testing
 }
 
 func TestValidateCandidateRejectsUngroundedFeatureOrigin(t *testing.T) {
-	authority := skillv2.AuthorityIdentity{Revision: "r", Digest: "d"}
+	authority := skill.AuthorityIdentity{Revision: "r", Digest: "d"}
 	contract, err := BuildContract([]SkillProfile{{SkillID: "a", GameplayDigest: "source", Authority: authority, Features: []FeatureKey{"effect.damage"}, Metrics: Metrics{Mutations: 1}}}, authority, CompositionPolicy{ID: "p"}, CallerPolicy{})
 	if err != nil {
 		t.Fatal(err)

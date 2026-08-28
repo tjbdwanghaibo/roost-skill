@@ -26,9 +26,9 @@ jobs:
       - if: runner.os == 'Linux'
         run: go test -race ./... -count=1
       - if: runner.os == 'Linux'
-        run: go test ./skillv2 -run '^$' -fuzz FuzzParseGeneratedNeverPanics -fuzztime 10s
+        run: go test ./skill -run '^$' -fuzz FuzzParseGeneratedNeverPanics -fuzztime 10s
       - if: runner.os == 'Linux'
-        run: go test ./skillv2 -run '^$' -fuzz FuzzRestoreRuntimeCheckpointNeverPanics -fuzztime 10s
+        run: go test ./skill -run '^$' -fuzz FuzzRestoreRuntimeCheckpointNeverPanics -fuzztime 10s
       - run: go test ./... -run '^$' -bench . -benchmem -count=1
 
   sync-e2e:
@@ -37,16 +37,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: cube-skill
-      - uses: actions/checkout@v4
-        with:
-          repository: tjbdwanghaibo/cube-core
-          ref: v1.3.0
-          path: cube-core
-      - uses: actions/checkout@v4
-        with:
-          repository: tjbdwanghaibo/cube-kit
-          ref: v1.1.0
-          path: cube-kit
       - uses: actions/setup-go@v5
         with:
           go-version-file: cube-skill/integration/sync-e2e/go.mod
@@ -55,6 +45,8 @@ jobs:
             cube-skill/integration/sync-e2e/go.sum
       - working-directory: cube-skill/integration/sync-e2e
         run: go test -race ./... -count=1
+      - working-directory: cube-skill/examples
+        run: go test ./... -count=1
 
   release-hygiene:
     runs-on: ubuntu-latest
@@ -70,6 +62,14 @@ jobs:
           base=$(echo "$mod" | sed -E 's#/v[0-9]+$##')
           echo "module: $mod (repo: $base)"
           git ls-remote "https://${base}.git" HEAD
+      - name: stable skill package only
+        run: |
+          test -d skill
+          test ! -e skillv2
+          if grep -R "roost-skill/skillv2\|\bskillv2\." --include='*.go' --include='*.yml' --include='*.yaml' .; then
+            echo "legacy skillv2 Go API reference found"
+            exit 1
+          fi
       # Docs referencing a pinned dependency version must match go.mod —
       # stale version references in docs were previously only caught by
       # manual review.

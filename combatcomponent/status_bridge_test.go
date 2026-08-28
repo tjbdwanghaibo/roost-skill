@@ -4,39 +4,39 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-skill/skillv2"
+	"github.com/tjbdwanghaibo/roost-skill/skill"
 
 	"github.com/tjbdwanghaibo/roost-skill/combat"
 )
 
-func newBridgeFixture() (*StatusBridge, *testRevision, *CombatComponent, *skillv2.Tick) {
+func newBridgeFixture() (*StatusBridge, *testRevision, *CombatComponent, *skill.Tick) {
 	target := NewCombatComponent(NewCombatDao(2, "game"))
 	target.InitCombatant(combat.Combatant{Alive: true, Health: 100, MaxHealth: 100})
 	target.SetAttributeBase(3, 100) // haste channel
 	revision := &testRevision{}
-	tick := skillv2.Tick(0)
+	tick := skill.Tick(0)
 	bridge := &StatusBridge{
 		Resolver: mapResolver{2: target},
 		Revision: revision,
-		Catalog: skillv2.GameplayCatalog{Statuses: skillv2.StatusCatalog{Entries: []skillv2.StatusCatalogEntry{
+		Catalog: skill.GameplayCatalog{Statuses: skill.StatusCatalog{Entries: []skill.StatusCatalogEntry{
 			{Handle: 10, Key: "burn", Category: "dot", DispelCategory: "magic", Dispellable: true, MaxStacks: 3,
-				AttributeModifiers: []skillv2.StatusAttributeModifier{{Attribute: 3, Operation: "mul_bp", Value: 12000}}},
+				AttributeModifiers: []skill.StatusAttributeModifier{{Attribute: 3, Operation: "mul_bp", Value: 12000}}},
 			{Handle: 11, Key: "stun", Category: "control", DispelCategory: "control", Dispellable: true,
-				TenacityPolicy: "scale_duration", MaximumDurationTicks: 6, ImmunityTags: []skillv2.GameplayTagHandle{7}},
+				TenacityPolicy: "scale_duration", MaximumDurationTicks: 6, ImmunityTags: []skill.GameplayTagHandle{7}},
 			{Handle: 12, Key: "fresh", RefreshPolicy: "replace", MaxStacks: 5},
 		}}},
-		CurrentTick: func() skillv2.Tick { return tick },
+		CurrentTick: func() skill.Tick { return tick },
 	}
 	return bridge, revision, target, &tick
 }
 
 func TestStatusBridgeAppliesStacksAndModifiers(t *testing.T) {
 	bridge, revision, target, _ := newBridgeFixture()
-	result, handled, err := bridge.Apply(skillv2.EffectCommand{Payload: skillv2.StatusCommand{SourceOwner: 1, Target: 2, Status: 10, DurationTicks: 20, Stacks: 2}})
+	result, handled, err := bridge.Apply(skill.EffectCommand{Payload: skill.StatusCommand{SourceOwner: 1, Target: 2, Status: 10, DurationTicks: 20, Stacks: 2}})
 	if err != nil || !handled {
 		t.Fatalf("handled=%v err=%v", handled, err)
 	}
-	payload := result.Payload.(skillv2.StatusEffectResult)
+	payload := result.Payload.(skill.StatusEffectResult)
 	if !payload.Succeeded || !payload.Result.Applied || payload.Result.PreviousStacks != 0 || payload.Result.CurrentStacks != 2 || payload.Result.DueTick != 20 {
 		t.Fatalf("payload = %+v", payload)
 	}
@@ -48,23 +48,23 @@ func TestStatusBridgeAppliesStacksAndModifiers(t *testing.T) {
 		t.Fatalf("events = %+v", revision.events)
 	}
 	// Stacking beyond MaxStacks caps at 3.
-	again, _, _ := bridge.Apply(skillv2.EffectCommand{Payload: skillv2.StatusCommand{SourceOwner: 1, Target: 2, Status: 10, DurationTicks: 20, Stacks: 5}})
-	if got := again.Payload.(skillv2.StatusEffectResult).Result.CurrentStacks; got != 3 {
+	again, _, _ := bridge.Apply(skill.EffectCommand{Payload: skill.StatusCommand{SourceOwner: 1, Target: 2, Status: 10, DurationTicks: 20, Stacks: 5}})
+	if got := again.Payload.(skill.StatusEffectResult).Result.CurrentStacks; got != 3 {
 		t.Fatalf("capped stacks = %d, want 3", got)
 	}
 }
 
 func TestStatusBridgeImmunityTenacityAndReplace(t *testing.T) {
 	bridge, revision, target, _ := newBridgeFixture()
-	bridge.HasGameplayTag = func(entity skillv2.EntityID, tag skillv2.GameplayTagHandle) bool {
+	bridge.HasGameplayTag = func(entity skill.EntityID, tag skill.GameplayTagHandle) bool {
 		return entity == 2 && tag == 7
 	}
 	// Immunity tag blocks the stun without touching the container.
-	result, _, err := bridge.Apply(skillv2.EffectCommand{Payload: skillv2.StatusCommand{Target: 2, Status: 11, DurationTicks: 10}})
+	result, _, err := bridge.Apply(skill.EffectCommand{Payload: skill.StatusCommand{Target: 2, Status: 11, DurationTicks: 10}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if payload := result.Payload.(skillv2.StatusEffectResult); !payload.Result.Immune || len(target.ActiveBuffs()) != 0 {
+	if payload := result.Payload.(skill.StatusEffectResult); !payload.Result.Immune || len(target.ActiveBuffs()) != 0 {
 		t.Fatalf("immunity leaked: %+v buffs=%d", payload, len(target.ActiveBuffs()))
 	}
 	if revision.events[0].Kind != "status_immune" {
@@ -73,40 +73,40 @@ func TestStatusBridgeImmunityTenacityAndReplace(t *testing.T) {
 	// Without the tag: tenacity scales the duration, then the policy cap clamps.
 	bridge.HasGameplayTag = nil
 	target.Dao().buffs.SetTenacityBP(5000) // -50%: 10 -> 5, below the 6-tick cap
-	applied, _, _ := bridge.Apply(skillv2.EffectCommand{Payload: skillv2.StatusCommand{Target: 2, Status: 11, DurationTicks: 10}})
-	if due := applied.Payload.(skillv2.StatusEffectResult).Result.DueTick; due != 5 {
+	applied, _, _ := bridge.Apply(skill.EffectCommand{Payload: skill.StatusCommand{Target: 2, Status: 11, DurationTicks: 10}})
+	if due := applied.Payload.(skill.StatusEffectResult).Result.DueTick; due != 5 {
 		t.Fatalf("tenacity due = %d, want 5", due)
 	}
 	// replace policy: re-application discards the old instance entirely.
-	bridge.Apply(skillv2.EffectCommand{Payload: skillv2.StatusCommand{Target: 2, Status: 12, DurationTicks: 10, Stacks: 4}})
-	replaced, _, _ := bridge.Apply(skillv2.EffectCommand{Payload: skillv2.StatusCommand{Target: 2, Status: 12, DurationTicks: 10, Stacks: 1}})
-	if got := replaced.Payload.(skillv2.StatusEffectResult).Result.CurrentStacks; got != 1 {
+	bridge.Apply(skill.EffectCommand{Payload: skill.StatusCommand{Target: 2, Status: 12, DurationTicks: 10, Stacks: 4}})
+	replaced, _, _ := bridge.Apply(skill.EffectCommand{Payload: skill.StatusCommand{Target: 2, Status: 12, DurationTicks: 10, Stacks: 1}})
+	if got := replaced.Payload.(skill.StatusEffectResult).Result.CurrentStacks; got != 1 {
 		t.Fatalf("replace stacks = %d, want 1", got)
 	}
-	if errored, _, err := bridge.Apply(skillv2.EffectCommand{Payload: skillv2.StatusCommand{Target: 2, Status: 99, DurationTicks: 1}}); err == nil {
+	if errored, _, err := bridge.Apply(skill.EffectCommand{Payload: skill.StatusCommand{Target: 2, Status: 99, DurationTicks: 1}}); err == nil {
 		t.Fatalf("unknown status accepted: %+v", errored)
 	}
-	if _, _, err := bridge.Apply(skillv2.EffectCommand{Payload: skillv2.StatusCommand{Target: 2, Status: 10, DurationTicks: 0}}); err == nil {
+	if _, _, err := bridge.Apply(skill.EffectCommand{Payload: skill.StatusCommand{Target: 2, Status: 10, DurationTicks: 0}}); err == nil {
 		t.Fatal("zero duration accepted")
 	}
 }
 
 func TestStatusBridgeRemoveAndDispel(t *testing.T) {
 	bridge, revision, target, _ := newBridgeFixture()
-	bridge.Apply(skillv2.EffectCommand{Payload: skillv2.StatusCommand{SourceOwner: 1, Target: 2, Status: 10, DurationTicks: 20, Stacks: 2}})
+	bridge.Apply(skill.EffectCommand{Payload: skill.StatusCommand{SourceOwner: 1, Target: 2, Status: 10, DurationTicks: 20, Stacks: 2}})
 	// Remove scoped to a different source owner is a no-op.
-	miss, _, _ := bridge.Apply(skillv2.EffectCommand{Payload: skillv2.RemoveStatusCommand{SourceOwner: 9, Target: 2, Status: 10}})
-	if payload := miss.Payload.(skillv2.StatusEffectResult); payload.Result.Removed || payload.Result.CurrentStacks != 2 {
+	miss, _, _ := bridge.Apply(skill.EffectCommand{Payload: skill.RemoveStatusCommand{SourceOwner: 9, Target: 2, Status: 10}})
+	if payload := miss.Payload.(skill.StatusEffectResult); payload.Result.Removed || payload.Result.CurrentStacks != 2 {
 		t.Fatalf("scoped remove hit: %+v", payload)
 	}
-	removed, _, _ := bridge.Apply(skillv2.EffectCommand{Payload: skillv2.RemoveStatusCommand{SourceOwner: 1, Target: 2, Status: 10}})
-	if payload := removed.Payload.(skillv2.StatusEffectResult); !payload.Result.Removed || payload.Result.RemovedStacks != 2 || target.AttributeCurrent(3) != 100 {
+	removed, _, _ := bridge.Apply(skill.EffectCommand{Payload: skill.RemoveStatusCommand{SourceOwner: 1, Target: 2, Status: 10}})
+	if payload := removed.Payload.(skill.StatusEffectResult); !payload.Result.Removed || payload.Result.RemovedStacks != 2 || target.AttributeCurrent(3) != 100 {
 		t.Fatalf("remove = %+v haste=%d", payload, target.AttributeCurrent(3))
 	}
 	// Dispel by category.
-	bridge.Apply(skillv2.EffectCommand{Payload: skillv2.StatusCommand{SourceOwner: 1, Target: 2, Status: 10, DurationTicks: 20}})
-	dispelled, _, _ := bridge.Apply(skillv2.EffectCommand{Payload: skillv2.DispelStatusCommand{Target: 2, Category: "magic", Count: 0}})
-	if payload := dispelled.Payload.(skillv2.StatusEffectResult); !payload.Result.Removed || payload.Result.CurrentStacks != 0 {
+	bridge.Apply(skill.EffectCommand{Payload: skill.StatusCommand{SourceOwner: 1, Target: 2, Status: 10, DurationTicks: 20}})
+	dispelled, _, _ := bridge.Apply(skill.EffectCommand{Payload: skill.DispelStatusCommand{Target: 2, Category: "magic", Count: 0}})
+	if payload := dispelled.Payload.(skill.StatusEffectResult); !payload.Result.Removed || payload.Result.CurrentStacks != 0 {
 		t.Fatalf("dispel = %+v", payload)
 	}
 	kinds := []string{}
@@ -123,10 +123,10 @@ func TestStatusBridgeRemoveAndDispel(t *testing.T) {
 
 func TestStatusBridgeAttributeModifierIsIndependent(t *testing.T) {
 	bridge, _, target, tickPtr := newBridgeFixture()
-	command := skillv2.AttributeModifierCommand{SourceOwner: 1, Target: 2, Attribute: 3, Operation: "mul_bp", Value: 12000, DurationTicks: 10}
-	bridge.Apply(skillv2.EffectCommand{Payload: command})
+	command := skill.AttributeModifierCommand{SourceOwner: 1, Target: 2, Attribute: 3, Operation: "mul_bp", Value: 12000, DurationTicks: 10}
+	bridge.Apply(skill.EffectCommand{Payload: command})
 	*tickPtr = 4
-	bridge.Apply(skillv2.EffectCommand{Payload: command})
+	bridge.Apply(skill.EffectCommand{Payload: command})
 	// Two independent ×1.2 grants aggregate additively: 100 * 1.4 = 140.
 	if got := target.AttributeCurrent(3); got != 140 {
 		t.Fatalf("modifiers = %d, want 140", got)
@@ -138,25 +138,25 @@ func TestStatusBridgeAttributeModifierIsIndependent(t *testing.T) {
 	if expired := target.TickBuffs(14); len(expired) != 1 || target.AttributeCurrent(3) != 100 {
 		t.Fatalf("second expiry: expired=%d haste=%d", len(expired), target.AttributeCurrent(3))
 	}
-	if _, _, err := bridge.Apply(skillv2.EffectCommand{Payload: skillv2.AttributeModifierCommand{Target: 2, Attribute: 3, Operation: "pow", Value: 2, DurationTicks: 1}}); err == nil {
+	if _, _, err := bridge.Apply(skill.EffectCommand{Payload: skill.AttributeModifierCommand{Target: 2, Attribute: 3, Operation: "pow", Value: 2, DurationTicks: 1}}); err == nil {
 		t.Fatal("unsupported operation accepted")
 	}
 }
 
 func TestHostAdapterResourceCommand(t *testing.T) {
 	adapter, revision, _, defender := newAdapterFixture()
-	spend, handled, err := adapter.Apply(skillv2.EffectCommand{Payload: skillv2.ResourceCommand{Target: 2, Resource: 5, Operation: "spend", Amount: 20}})
+	spend, handled, err := adapter.Apply(skill.EffectCommand{Payload: skill.ResourceCommand{Target: 2, Resource: 5, Operation: "spend", Amount: 20}})
 	if err != nil || !handled {
 		t.Fatalf("handled=%v err=%v", handled, err)
 	}
 	if value, _ := spend.Value.Int(); value != 30 || defender.AttributeBase(5) != 30 {
 		t.Fatalf("spend result = %d base=%d", value, defender.AttributeBase(5))
 	}
-	if _, _, err := adapter.Apply(skillv2.EffectCommand{Payload: skillv2.ResourceCommand{Target: 2, Resource: 5, Operation: "spend", Amount: 99}}); !errors.Is(err, skillv2.ErrInsufficientResource) {
+	if _, _, err := adapter.Apply(skill.EffectCommand{Payload: skill.ResourceCommand{Target: 2, Resource: 5, Operation: "spend", Amount: 99}}); !errors.Is(err, skill.ErrInsufficientResource) {
 		t.Fatalf("overspend accepted: %v", err)
 	}
 	// No-op change commits nothing.
-	noop, _, _ := adapter.Apply(skillv2.EffectCommand{Payload: skillv2.ResourceCommand{Target: 2, Resource: 5, Operation: "add", Amount: 0}})
+	noop, _, _ := adapter.Apply(skill.EffectCommand{Payload: skill.ResourceCommand{Target: 2, Resource: 5, Operation: "add", Amount: 0}})
 	if noop.Commit.Changed || revision.revision != 1 {
 		t.Fatalf("no-op bumped revision: %+v revision=%d", noop.Commit, revision.revision)
 	}
@@ -165,9 +165,9 @@ func TestHostAdapterResourceCommand(t *testing.T) {
 	}
 }
 
-func statusInstanceCommand(owner, target skillv2.EntityID, id combat.BuffInstanceID, operation string, value int64) skillv2.ModifyStatusInstanceCommand {
-	return skillv2.ModifyStatusInstanceCommand{
-		Owner: owner, Status: skillv2.StatusInstanceRef{ID: skillv2.NewStatusInstanceID(uint64(id)), Target: target},
+func statusInstanceCommand(owner, target skill.EntityID, id combat.BuffInstanceID, operation string, value int64) skill.ModifyStatusInstanceCommand {
+	return skill.ModifyStatusInstanceCommand{
+		Owner: owner, Status: skill.StatusInstanceRef{ID: skill.NewStatusInstanceID(uint64(id)), Target: target},
 		Operation: operation, Value: value,
 	}
 }
@@ -175,33 +175,33 @@ func statusInstanceCommand(owner, target skillv2.EntityID, id combat.BuffInstanc
 func TestStatusBridgeModifyInstanceAuthorizationAndStacks(t *testing.T) {
 	bridge, _, target, _ := newBridgeFixture()
 	// Catalog entry 10 (burn): SourceOwnership "" => source-owned; dispellable.
-	bridge.Apply(skillv2.EffectCommand{Payload: skillv2.StatusCommand{SourceOwner: 1, Target: 2, Status: 10, DurationTicks: 20, Stacks: 2}})
+	bridge.Apply(skill.EffectCommand{Payload: skill.StatusCommand{SourceOwner: 1, Target: 2, Status: 10, DurationTicks: 20, Stacks: 2}})
 	instanceID := target.ActiveBuffs()[0].Instance
 
 	// A stranger may not edit a source-owned instance.
-	denied, _, err := bridge.Apply(skillv2.EffectCommand{Payload: statusInstanceCommand(5, 2, instanceID, "add_stacks", 1)})
+	denied, _, err := bridge.Apply(skill.EffectCommand{Payload: statusInstanceCommand(5, 2, instanceID, "add_stacks", 1)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if payload := denied.Payload.(skillv2.StatusEffectResult); payload.Succeeded || payload.FailureReason != skillv2.ExpectedFailurePermissionDenied {
+	if payload := denied.Payload.(skill.StatusEffectResult); payload.Succeeded || payload.FailureReason != skill.ExpectedFailurePermissionDenied {
 		t.Fatalf("stranger edit accepted: %+v", payload)
 	}
 	// The source stacks it up to the cap (MaxStacks 3).
-	stacked, _, _ := bridge.Apply(skillv2.EffectCommand{Payload: statusInstanceCommand(1, 2, instanceID, "add_stacks", 5)})
-	if payload := stacked.Payload.(skillv2.StatusEffectResult); payload.Result.CurrentStacks != 3 || payload.Result.PreviousStacks != 2 {
+	stacked, _, _ := bridge.Apply(skill.EffectCommand{Payload: statusInstanceCommand(1, 2, instanceID, "add_stacks", 5)})
+	if payload := stacked.Payload.(skill.StatusEffectResult); payload.Result.CurrentStacks != 3 || payload.Result.PreviousStacks != 2 {
 		t.Fatalf("add_stacks = %+v", payload.Result)
 	}
 	if got := target.AttributeCurrent(3); got != 160 { // 100 * (1 + 0.2*3)
 		t.Fatalf("modifier rescale = %d, want 160", got)
 	}
 	// The target itself may remove a dispellable instance.
-	removed, _, _ := bridge.Apply(skillv2.EffectCommand{Payload: statusInstanceCommand(2, 2, instanceID, "remove", 0)})
-	if payload := removed.Payload.(skillv2.StatusEffectResult); !payload.Result.Removed || target.AttributeCurrent(3) != 100 {
+	removed, _, _ := bridge.Apply(skill.EffectCommand{Payload: statusInstanceCommand(2, 2, instanceID, "remove", 0)})
+	if payload := removed.Payload.(skill.StatusEffectResult); !payload.Result.Removed || target.AttributeCurrent(3) != 100 {
 		t.Fatalf("self remove = %+v haste=%d", payload.Result, target.AttributeCurrent(3))
 	}
 	// Vanished instances answer reference-expired.
-	expired, _, _ := bridge.Apply(skillv2.EffectCommand{Payload: statusInstanceCommand(1, 2, instanceID, "add_stacks", 1)})
-	if payload := expired.Payload.(skillv2.StatusEffectResult); payload.Succeeded || payload.FailureReason != skillv2.ExpectedFailureReferenceExpired {
+	expired, _, _ := bridge.Apply(skill.EffectCommand{Payload: statusInstanceCommand(1, 2, instanceID, "add_stacks", 1)})
+	if payload := expired.Payload.(skill.StatusEffectResult); payload.Succeeded || payload.FailureReason != skill.ExpectedFailureReferenceExpired {
 		t.Fatalf("expired ref = %+v", payload)
 	}
 }
@@ -218,29 +218,29 @@ func TestStatusBridgeModifyInstanceDurationsAndTransfer(t *testing.T) {
 	other.SetAttributeBase(3, 100)
 	bridge.Resolver = mapResolver{2: target, 3: other}
 
-	bridge.Apply(skillv2.EffectCommand{Payload: skillv2.StatusCommand{SourceOwner: 1, Target: 2, Status: 10, DurationTicks: 20}})
+	bridge.Apply(skill.EffectCommand{Payload: skill.StatusCommand{SourceOwner: 1, Target: 2, Status: 10, DurationTicks: 20}})
 	instanceID := target.ActiveBuffs()[0].Instance
 	*tickPtr = 5
 
 	// add_duration: remaining 15 + 100 clamps at the 30-tick policy cap.
-	extended, _, _ := bridge.Apply(skillv2.EffectCommand{Payload: statusInstanceCommand(1, 2, instanceID, "add_duration", 100)})
-	if payload := extended.Payload.(skillv2.StatusEffectResult); payload.Result.DueTick != 35 || payload.Result.PreviousDueTick != 20 {
+	extended, _, _ := bridge.Apply(skill.EffectCommand{Payload: statusInstanceCommand(1, 2, instanceID, "add_duration", 100)})
+	if payload := extended.Payload.(skill.StatusEffectResult); payload.Result.DueTick != 35 || payload.Result.PreviousDueTick != 20 {
 		t.Fatalf("add_duration = %+v", payload.Result)
 	}
 	// set_duration is not whitelisted.
-	blocked, _, _ := bridge.Apply(skillv2.EffectCommand{Payload: statusInstanceCommand(1, 2, instanceID, "set_duration", 5)})
-	if payload := blocked.Payload.(skillv2.StatusEffectResult); payload.Succeeded || payload.FailureReason != skillv2.ExpectedFailurePolicyRejected {
+	blocked, _, _ := bridge.Apply(skill.EffectCommand{Payload: statusInstanceCommand(1, 2, instanceID, "set_duration", 5)})
+	if payload := blocked.Payload.(skill.StatusEffectResult); payload.Succeeded || payload.FailureReason != skill.ExpectedFailurePolicyRejected {
 		t.Fatalf("whitelist bypassed: %+v", payload)
 	}
 	// Steal: a stranger transfers it because the policy is stealable.
 	command := statusInstanceCommand(9, 2, instanceID, "transfer_to", 0)
 	command.Target = 3
 	command.OwnershipPolicy = "new_source"
-	stolen, _, err := bridge.Apply(skillv2.EffectCommand{Payload: command})
+	stolen, _, err := bridge.Apply(skill.EffectCommand{Payload: command})
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := stolen.Payload.(skillv2.StatusEffectResult)
+	payload := stolen.Payload.(skill.StatusEffectResult)
 	if !payload.Result.Removed || payload.Result.Created.Target != 3 || payload.Result.Created.ID.OpaqueID() == 0 {
 		t.Fatalf("transfer = %+v", payload.Result)
 	}

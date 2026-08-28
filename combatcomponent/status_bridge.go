@@ -3,7 +3,7 @@ package combatcomponent
 import (
 	"fmt"
 
-	"github.com/tjbdwanghaibo/roost-skill/skillv2"
+	"github.com/tjbdwanghaibo/roost-skill/skill"
 
 	"github.com/tjbdwanghaibo/roost-skill/combat"
 )
@@ -18,7 +18,7 @@ const AttributeModifierBuffID combat.BuffID = 0xFFFFFFFF
 // AttributeModifierTag classifies bridge-created modifier instances.
 const AttributeModifierTag combat.Tag = "attribute_modifier"
 
-// StatusBridge lands the skillv2 status and attribute-modifier effect
+// StatusBridge lands the skill status and attribute-modifier effect
 // commands on combat containers: StatusCommand becomes a BuffContainer
 // application driven by the status catalog entry, Remove/Dispel become
 // container removals, and AttributeModifierCommand becomes an independent
@@ -36,36 +36,36 @@ type StatusBridge struct {
 	Revision RevisionSource
 	// Catalog supplies status policies (stacking, dispel category, immunity
 	// tags, attribute modifiers, tenacity and duration caps).
-	Catalog skillv2.GameplayCatalog
+	Catalog skill.GameplayCatalog
 	// CurrentTick supplies the authoritative tick durations anchor to.
-	CurrentTick func() skillv2.Tick
+	CurrentTick func() skill.Tick
 	// HasGameplayTag reports whether the target carries a gameplay tag —
 	// immunity tags are world facts the component does not own. nil disables
 	// immunity-tag checks.
-	HasGameplayTag func(target skillv2.EntityID, tag skillv2.GameplayTagHandle) bool
+	HasGameplayTag func(target skill.EntityID, tag skill.GameplayTagHandle) bool
 }
 
 // Apply handles a status-domain effect command. handled=false means the
 // payload is not a status command and the caller must process it.
-func (bridge *StatusBridge) Apply(command skillv2.EffectCommand) (skillv2.EffectResult, bool, error) {
+func (bridge *StatusBridge) Apply(command skill.EffectCommand) (skill.EffectResult, bool, error) {
 	switch payload := command.Payload.(type) {
-	case skillv2.StatusCommand:
+	case skill.StatusCommand:
 		result, err := bridge.applyStatus(payload)
 		return result, true, err
-	case skillv2.RemoveStatusCommand:
+	case skill.RemoveStatusCommand:
 		result, err := bridge.removeStatus(payload)
 		return result, true, err
-	case skillv2.DispelStatusCommand:
+	case skill.DispelStatusCommand:
 		result, err := bridge.dispelStatus(payload)
 		return result, true, err
-	case skillv2.AttributeModifierCommand:
+	case skill.AttributeModifierCommand:
 		result, err := bridge.applyAttributeModifier(payload)
 		return result, true, err
-	case skillv2.ModifyStatusInstanceCommand:
+	case skill.ModifyStatusInstanceCommand:
 		result, err := bridge.modifyStatusInstance(payload)
 		return result, true, err
 	}
-	return skillv2.EffectResult{}, false, nil
+	return skill.EffectResult{}, false, nil
 }
 
 // modifyStatusInstance lands instance-handle operations (steal, transfer,
@@ -75,10 +75,10 @@ func (bridge *StatusBridge) Apply(command skillv2.EffectCommand) (skillv2.Effect
 // container's instance ids as the opaque ids. Authorization and operation
 // gating mirror the MemoryHost matrix (SourceOwnership, Dispellable,
 // Copyable/Transferable/Stealable, DurationOperations, MaximumDurationTicks).
-func (bridge *StatusBridge) modifyStatusInstance(command skillv2.ModifyStatusInstanceCommand) (skillv2.EffectResult, error) {
+func (bridge *StatusBridge) modifyStatusInstance(command skill.ModifyStatusInstanceCommand) (skill.EffectResult, error) {
 	component, ok := bridge.Resolver.CombatComponent(command.Status.Target)
 	if !ok {
-		return skillv2.EffectResult{Commit: skillv2.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{FailureReason: skillv2.ExpectedFailureReferenceExpired}}}, nil
+		return skill.EffectResult{Commit: skill.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{FailureReason: skill.ExpectedFailureReferenceExpired}}}, nil
 	}
 	id := combat.BuffInstanceID(command.Status.ID.OpaqueID())
 	var instance combat.BuffInstance
@@ -90,11 +90,11 @@ func (bridge *StatusBridge) modifyStatusInstance(command skillv2.ModifyStatusIns
 		}
 	}
 	if !found {
-		return skillv2.EffectResult{Commit: skillv2.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{FailureReason: skillv2.ExpectedFailureReferenceExpired}}}, nil
+		return skill.EffectResult{Commit: skill.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{FailureReason: skill.ExpectedFailureReferenceExpired}}}, nil
 	}
-	policy, ok := bridge.statusPolicy(skillv2.StatusHandle(instance.Spec.ID))
+	policy, ok := bridge.statusPolicy(skill.StatusHandle(instance.Spec.ID))
 	if !ok {
-		return skillv2.EffectResult{}, fmt.Errorf("combatcomponent: buff %d has no status policy", instance.Spec.ID)
+		return skill.EffectResult{}, fmt.Errorf("combatcomponent: buff %d has no status policy", instance.Spec.ID)
 	}
 	target := command.Status.Target
 	authorized := policy.SourceOwnership == "owner" && command.Owner == target ||
@@ -106,7 +106,7 @@ func (bridge *StatusBridge) modifyStatusInstance(command skillv2.ModifyStatusIns
 		authorized = true
 	}
 	if !authorized {
-		return skillv2.EffectResult{Commit: skillv2.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{FailureReason: skillv2.ExpectedFailurePermissionDenied}}}, nil
+		return skill.EffectResult{Commit: skill.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{FailureReason: skill.ExpectedFailurePermissionDenied}}}, nil
 	}
 	now := int64(bridge.CurrentTick())
 	clampDue := func(due int64) int64 {
@@ -126,15 +126,15 @@ func (bridge *StatusBridge) modifyStatusInstance(command skillv2.ModifyStatusIns
 		}
 		return false
 	}
-	beforeStacks, beforeDue := int(instance.Stacks), skillv2.Tick(instance.DueTick)
+	beforeStacks, beforeDue := int(instance.Stacks), skill.Tick(instance.DueTick)
 	remaining := instance.DueTick - now
 	if remaining < 0 {
 		remaining = 0
 	}
-	policyFailure := func() (skillv2.EffectResult, error) {
-		return skillv2.EffectResult{Commit: skillv2.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{FailureReason: skillv2.ExpectedFailurePolicyRejected}}}, nil
+	policyFailure := func() (skill.EffectResult, error) {
+		return skill.EffectResult{Commit: skill.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{FailureReason: skill.ExpectedFailurePolicyRejected}}}, nil
 	}
-	created := skillv2.StatusInstanceRef{}
+	created := skill.StatusInstanceRef{}
 	removed := false
 	switch command.Operation {
 	case "remove":
@@ -187,7 +187,7 @@ func (bridge *StatusBridge) modifyStatusInstance(command skillv2.ModifyStatusIns
 		allowed := command.Operation == "copy_to" && policy.Copyable || command.Operation == "transfer_to" && policy.Transferable
 		destination, alive := bridge.Resolver.CombatComponent(command.Target)
 		if command.Target == 0 || !alive || !destination.Combatant().Alive {
-			return skillv2.EffectResult{Commit: skillv2.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{FailureReason: skillv2.ExpectedFailureInvalidTarget}}}, nil
+			return skill.EffectResult{Commit: skill.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{FailureReason: skill.ExpectedFailureInvalidTarget}}}, nil
 		}
 		if !allowed || !validOwnershipPolicy(command.OwnershipPolicy) {
 			return policyFailure()
@@ -195,7 +195,7 @@ func (bridge *StatusBridge) modifyStatusInstance(command skillv2.ModifyStatusIns
 		if bridge.HasGameplayTag != nil {
 			for _, immunity := range policy.ImmunityTags {
 				if bridge.HasGameplayTag(command.Target, immunity) {
-					return skillv2.EffectResult{Commit: skillv2.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{Succeeded: true}, Result: skillv2.StatusResult{Immune: true, PreviousStacks: beforeStacks, CurrentStacks: beforeStacks, DueTick: beforeDue, Status: command.Status}}}, nil
+					return skill.EffectResult{Commit: skill.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.StatusResult{Immune: true, PreviousStacks: beforeStacks, CurrentStacks: beforeStacks, DueTick: beforeDue, Status: command.Status}}}, nil
 				}
 			}
 		}
@@ -210,20 +210,20 @@ func (bridge *StatusBridge) modifyStatusInstance(command skillv2.ModifyStatusIns
 			moved.Source = int64(command.Owner)
 		}
 		createdID := destination.AdoptBuff(moved)
-		created = skillv2.StatusInstanceRef{ID: skillv2.NewStatusInstanceID(uint64(createdID)), Target: command.Target}
+		created = skill.StatusInstanceRef{ID: skill.NewStatusInstanceID(uint64(createdID)), Target: command.Target}
 		if command.Operation == "transfer_to" {
 			component.RemoveBuff(id)
 			removed = true
 		}
 	default:
-		return skillv2.EffectResult{}, fmt.Errorf("combatcomponent: unsupported status instance operation %q", command.Operation)
+		return skill.EffectResult{}, fmt.Errorf("combatcomponent: unsupported status instance operation %q", command.Operation)
 	}
 	context := command.Event
 	context.Owner, context.Target, context.Result = command.Owner, target, "status_instance_"+command.Operation
 	receipt := bridge.Revision.CommitEffect([]EffectEvent{{Kind: "status_instance_" + command.Operation, Entity: target, Context: context}})
 	receipt.Changed = true
 	currentStacks := int(instance.Stacks)
-	dueTick := skillv2.Tick(instance.DueTick)
+	dueTick := skill.Tick(instance.DueTick)
 	if removed {
 		currentStacks = 0
 	}
@@ -231,7 +231,7 @@ func (bridge *StatusBridge) modifyStatusInstance(command skillv2.ModifyStatusIns
 	if removedStacks < 0 {
 		removedStacks = 0
 	}
-	return skillv2.EffectResult{Commit: receipt, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{Succeeded: true}, Result: skillv2.StatusResult{Applied: true, Removed: removed, PreviousStacks: beforeStacks, CurrentStacks: currentStacks, RemovedStacks: removedStacks, DueTick: dueTick, PreviousDueTick: beforeDue, Status: command.Status, Created: created}}}, nil
+	return skill.EffectResult{Commit: receipt, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.StatusResult{Applied: true, Removed: removed, PreviousStacks: beforeStacks, CurrentStacks: currentStacks, RemovedStacks: removedStacks, DueTick: dueTick, PreviousDueTick: beforeDue, Status: command.Status, Created: created}}}, nil
 }
 
 func (bridge *StatusBridge) setStacks(component *CombatComponent, id combat.BuffInstanceID, stacks int64) (combat.BuffInstance, bool) {
@@ -246,18 +246,18 @@ func validOwnershipPolicy(policy string) bool {
 	return policy == "original_owner" || policy == "new_owner" || policy == "new_source"
 }
 
-func (bridge *StatusBridge) statusPolicy(handle skillv2.StatusHandle) (skillv2.StatusCatalogEntry, bool) {
+func (bridge *StatusBridge) statusPolicy(handle skill.StatusHandle) (skill.StatusCatalogEntry, bool) {
 	for _, entry := range bridge.Catalog.Statuses.Entries {
 		if entry.Handle == handle {
 			return entry, true
 		}
 	}
-	return skillv2.StatusCatalogEntry{}, false
+	return skill.StatusCatalogEntry{}, false
 }
 
 // buffSpec translates a status catalog entry plus one application command
 // into the combat.BuffSpec the container applies.
-func buffSpec(policy skillv2.StatusCatalogEntry, command skillv2.StatusCommand) combat.BuffSpec {
+func buffSpec(policy skill.StatusCatalogEntry, command skill.StatusCommand) combat.BuffSpec {
 	spec := combat.BuffSpec{
 		ID:               combat.BuffID(policy.Handle),
 		MaxStacks:        int64(policy.MaxStacks),
@@ -306,17 +306,17 @@ func (bridge *StatusBridge) buffStacks(component *CombatComponent, id combat.Buf
 	return stacks
 }
 
-func (bridge *StatusBridge) applyStatus(command skillv2.StatusCommand) (skillv2.EffectResult, error) {
+func (bridge *StatusBridge) applyStatus(command skill.StatusCommand) (skill.EffectResult, error) {
 	component, ok := bridge.Resolver.CombatComponent(command.Target)
 	if !ok || !component.Combatant().Alive {
-		return skillv2.EffectResult{Commit: skillv2.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{FailureReason: skillv2.ExpectedFailureInvalidTarget}}}, nil
+		return skill.EffectResult{Commit: skill.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{FailureReason: skill.ExpectedFailureInvalidTarget}}}, nil
 	}
 	policy, ok := bridge.statusPolicy(command.Status)
 	if !ok {
-		return skillv2.EffectResult{}, fmt.Errorf("combatcomponent: unknown status handle %d", command.Status)
+		return skill.EffectResult{}, fmt.Errorf("combatcomponent: unknown status handle %d", command.Status)
 	}
 	if command.DurationTicks <= 0 {
-		return skillv2.EffectResult{}, fmt.Errorf("combatcomponent: status duration must be positive")
+		return skill.EffectResult{}, fmt.Errorf("combatcomponent: status duration must be positive")
 	}
 	context := command.Event
 	context.Owner, context.Target, context.EffectIndex = command.SourceOwner, command.Target, command.Meta.EffectIndex
@@ -327,7 +327,7 @@ func (bridge *StatusBridge) applyStatus(command skillv2.StatusCommand) (skillv2.
 				context.Result = "immune"
 				receipt := bridge.Revision.CommitEffect([]EffectEvent{{Kind: "status_immune", Entity: command.Target, Context: context}})
 				receipt.Changed = true
-				return skillv2.EffectResult{Commit: receipt, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{Succeeded: true}, Result: skillv2.StatusResult{Immune: true, PreviousStacks: previousStacks, CurrentStacks: previousStacks}}}, nil
+				return skill.EffectResult{Commit: receipt, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.StatusResult{Immune: true, PreviousStacks: previousStacks, CurrentStacks: previousStacks}}}, nil
 			}
 		}
 	}
@@ -357,7 +357,7 @@ func (bridge *StatusBridge) applyStatus(command skillv2.StatusCommand) (skillv2.
 		context.Result = "immune"
 		receipt := bridge.Revision.CommitEffect([]EffectEvent{{Kind: "status_immune", Entity: command.Target, Context: context}})
 		receipt.Changed = true
-		return skillv2.EffectResult{Commit: receipt, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{Succeeded: true}, Result: skillv2.StatusResult{Immune: true, PreviousStacks: previousStacks, CurrentStacks: previousStacks}}}, nil
+		return skill.EffectResult{Commit: receipt, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.StatusResult{Immune: true, PreviousStacks: previousStacks, CurrentStacks: previousStacks}}}, nil
 	}
 	for _, instance := range component.ActiveBuffs() {
 		if instance.Spec.ID == spec.ID && instance.DueTick > dueTick {
@@ -368,13 +368,13 @@ func (bridge *StatusBridge) applyStatus(command skillv2.StatusCommand) (skillv2.
 	receipt := bridge.Revision.CommitEffect([]EffectEvent{{Kind: "status_applied", Entity: command.Target, Context: context}})
 	receipt.Changed = true
 	currentStacks := bridge.buffStacks(component, spec.ID)
-	return skillv2.EffectResult{Commit: receipt, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{Succeeded: true}, Result: skillv2.StatusResult{Applied: true, PreviousStacks: previousStacks, CurrentStacks: currentStacks, DueTick: skillv2.Tick(dueTick)}}}, nil
+	return skill.EffectResult{Commit: receipt, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.StatusResult{Applied: true, PreviousStacks: previousStacks, CurrentStacks: currentStacks, DueTick: skill.Tick(dueTick)}}}, nil
 }
 
-func (bridge *StatusBridge) removeStatus(command skillv2.RemoveStatusCommand) (skillv2.EffectResult, error) {
+func (bridge *StatusBridge) removeStatus(command skill.RemoveStatusCommand) (skill.EffectResult, error) {
 	component, ok := bridge.Resolver.CombatComponent(command.Target)
 	if !ok {
-		return skillv2.EffectResult{Commit: skillv2.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{FailureReason: skillv2.ExpectedFailureInvalidTarget}}}, nil
+		return skill.EffectResult{Commit: skill.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{FailureReason: skill.ExpectedFailureInvalidTarget}}}, nil
 	}
 	id := combat.BuffID(command.Status)
 	previousStacks := bridge.buffStacks(component, id)
@@ -391,20 +391,20 @@ func (bridge *StatusBridge) removeStatus(command skillv2.RemoveStatusCommand) (s
 		}
 	}
 	if removed == 0 {
-		return skillv2.EffectResult{Commit: skillv2.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{Succeeded: true}, Result: skillv2.StatusResult{PreviousStacks: previousStacks, CurrentStacks: previousStacks}}}, nil
+		return skill.EffectResult{Commit: skill.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.StatusResult{PreviousStacks: previousStacks, CurrentStacks: previousStacks}}}, nil
 	}
 	context := command.Event
 	context.Owner, context.Target, context.Result = command.SourceOwner, command.Target, "status_removed"
 	receipt := bridge.Revision.CommitEffect([]EffectEvent{{Kind: "status_removed", Entity: command.Target, Context: context}})
 	receipt.Changed = true
 	currentStacks := bridge.buffStacks(component, id)
-	return skillv2.EffectResult{Commit: receipt, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{Succeeded: true}, Result: skillv2.StatusResult{Removed: true, PreviousStacks: previousStacks, CurrentStacks: currentStacks, RemovedStacks: previousStacks - currentStacks}}}, nil
+	return skill.EffectResult{Commit: receipt, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.StatusResult{Removed: true, PreviousStacks: previousStacks, CurrentStacks: currentStacks, RemovedStacks: previousStacks - currentStacks}}}, nil
 }
 
-func (bridge *StatusBridge) dispelStatus(command skillv2.DispelStatusCommand) (skillv2.EffectResult, error) {
+func (bridge *StatusBridge) dispelStatus(command skill.DispelStatusCommand) (skill.EffectResult, error) {
 	component, ok := bridge.Resolver.CombatComponent(command.Target)
 	if !ok {
-		return skillv2.EffectResult{Commit: skillv2.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{FailureReason: skillv2.ExpectedFailureInvalidTarget}}}, nil
+		return skill.EffectResult{Commit: skill.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{FailureReason: skill.ExpectedFailureInvalidTarget}}}, nil
 	}
 	tag := combat.Tag(command.Category)
 	previousStacks := 0
@@ -415,7 +415,7 @@ func (bridge *StatusBridge) dispelStatus(command skillv2.DispelStatusCommand) (s
 	}
 	removed := component.DispelBuffs(tag, command.Count)
 	if len(removed) == 0 {
-		return skillv2.EffectResult{Commit: skillv2.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{Succeeded: true}, Result: skillv2.StatusResult{PreviousStacks: previousStacks, CurrentStacks: previousStacks}}}, nil
+		return skill.EffectResult{Commit: skill.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.StatusResult{PreviousStacks: previousStacks, CurrentStacks: previousStacks}}}, nil
 	}
 	removedStacks := 0
 	for _, instance := range removed {
@@ -425,19 +425,19 @@ func (bridge *StatusBridge) dispelStatus(command skillv2.DispelStatusCommand) (s
 	context.Target, context.Result = command.Target, "status_dispelled"
 	receipt := bridge.Revision.CommitEffect([]EffectEvent{{Kind: "status_dispelled", Entity: command.Target, Context: context}})
 	receipt.Changed = true
-	return skillv2.EffectResult{Commit: receipt, Payload: skillv2.StatusEffectResult{ResultOutcome: skillv2.ResultOutcome{Succeeded: true}, Result: skillv2.StatusResult{Removed: true, PreviousStacks: previousStacks, CurrentStacks: previousStacks - removedStacks, RemovedStacks: removedStacks}}}, nil
+	return skill.EffectResult{Commit: receipt, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.StatusResult{Removed: true, PreviousStacks: previousStacks, CurrentStacks: previousStacks - removedStacks, RemovedStacks: removedStacks}}}, nil
 }
 
-func (bridge *StatusBridge) applyAttributeModifier(command skillv2.AttributeModifierCommand) (skillv2.EffectResult, error) {
+func (bridge *StatusBridge) applyAttributeModifier(command skill.AttributeModifierCommand) (skill.EffectResult, error) {
 	component, ok := bridge.Resolver.CombatComponent(command.Target)
 	if !ok {
-		return skillv2.EffectResult{Commit: skillv2.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skillv2.AttributeModifierEffectResult{ResultOutcome: skillv2.ResultOutcome{FailureReason: skillv2.ExpectedFailureInvalidTarget}}}, nil
+		return skill.EffectResult{Commit: skill.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skill.AttributeModifierEffectResult{ResultOutcome: skill.ResultOutcome{FailureReason: skill.ExpectedFailureInvalidTarget}}}, nil
 	}
 	if command.Operation != "add" && command.Operation != "mul_bp" {
-		return skillv2.EffectResult{}, fmt.Errorf("combatcomponent: unsupported modifier operation %q", command.Operation)
+		return skill.EffectResult{}, fmt.Errorf("combatcomponent: unsupported modifier operation %q", command.Operation)
 	}
 	if command.DurationTicks <= 0 {
-		return skillv2.EffectResult{}, fmt.Errorf("combatcomponent: modifier duration must be positive")
+		return skill.EffectResult{}, fmt.Errorf("combatcomponent: modifier duration must be positive")
 	}
 	modifier := combat.Modifier{Attribute: combat.AttributeID(command.Attribute)}
 	if command.Operation == "mul_bp" {
@@ -456,7 +456,7 @@ func (bridge *StatusBridge) applyAttributeModifier(command skillv2.AttributeModi
 	context.Owner, context.Target, context.Result = command.SourceOwner, command.Target, "attribute_modifier_applied"
 	receipt := bridge.Revision.CommitEffect([]EffectEvent{{Kind: "attribute_modifier_applied", Entity: command.Target, Context: context}})
 	receipt.Changed = true
-	return skillv2.EffectResult{Commit: receipt, Payload: skillv2.AttributeModifierEffectResult{ResultOutcome: skillv2.ResultOutcome{Succeeded: true}, Result: skillv2.AttributeModifierResult{Applied: true, DueTick: skillv2.Tick(tick) + command.DurationTicks}}}, nil
+	return skill.EffectResult{Commit: receipt, Payload: skill.AttributeModifierEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.AttributeModifierResult{Applied: true, DueTick: skill.Tick(tick) + command.DurationTicks}}}, nil
 }
 
 func containsBuffTag(tags []combat.Tag, want combat.Tag) bool {

@@ -1,4 +1,4 @@
-// StatusBridge 与确定性掷点演示：skillv2 的 status / attribute-modifier
+// StatusBridge 与确定性掷点演示：skill 的 status / attribute-modifier
 // 效果命令落到 combat 容器，暴击/闪避作为 HMAC 掷点事实进入伤害管线。
 // 运行：go run ./statusbridge
 package main
@@ -8,7 +8,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-skill/combat"
 	"github.com/tjbdwanghaibo/roost-skill/combatcomponent"
-	"github.com/tjbdwanghaibo/roost-skill/skillv2"
+	"github.com/tjbdwanghaibo/roost-skill/skill"
 )
 
 const (
@@ -16,24 +16,24 @@ const (
 	attrHaste combat.AttributeID = 3
 )
 
-type resolver map[skillv2.EntityID]*combatcomponent.CombatComponent
+type resolver map[skill.EntityID]*combatcomponent.CombatComponent
 
-func (r resolver) CombatComponent(id skillv2.EntityID) (*combatcomponent.CombatComponent, bool) {
+func (r resolver) CombatComponent(id skill.EntityID) (*combatcomponent.CombatComponent, bool) {
 	component, ok := r[id]
 	return component, ok
 }
 
 type world struct {
-	revision skillv2.WorldRevision
+	revision skill.WorldRevision
 }
 
-func (w *world) CurrentRevision() skillv2.WorldRevision { return w.revision }
-func (w *world) CommitEffect(events []combatcomponent.EffectEvent) skillv2.CommitReceipt {
+func (w *world) CurrentRevision() skill.WorldRevision { return w.revision }
+func (w *world) CommitEffect(events []combatcomponent.EffectEvent) skill.CommitReceipt {
 	w.revision++
 	for _, event := range events {
 		fmt.Printf("event: %-24s entity=%d result=%s\n", event.Kind, event.Entity, event.Context.Result)
 	}
-	return skillv2.CommitReceipt{Revision: w.revision}
+	return skill.CommitReceipt{Revision: w.revision}
 }
 
 func main() {
@@ -52,19 +52,19 @@ func main() {
 		defender.InitCombatant(combatant)
 	}
 
-	tick := skillv2.Tick(0)
+	tick := skill.Tick(0)
 	bridge := &combatcomponent.StatusBridge{
 		Resolver: resolver{1: attacker, 2: defender},
 		Revision: &world{},
-		Catalog: skillv2.GameplayCatalog{Statuses: skillv2.StatusCatalog{Entries: []skillv2.StatusCatalogEntry{
+		Catalog: skill.GameplayCatalog{Statuses: skill.StatusCatalog{Entries: []skill.StatusCatalogEntry{
 			{Handle: 20, Key: "sunder", Category: "debuff", DispelCategory: "physical", Dispellable: true, MaxStacks: 3,
-				AttributeModifiers: []skillv2.StatusAttributeModifier{{Attribute: skillv2.AttributeHandle(attrArmor), Operation: "mul_bp", Value: 7500}}}, // -25% 护甲/层
+				AttributeModifiers: []skill.StatusAttributeModifier{{Attribute: skill.AttributeHandle(attrArmor), Operation: "mul_bp", Value: 7500}}}, // -25% 护甲/层
 		}}},
-		CurrentTick: func() skillv2.Tick { return tick },
+		CurrentTick: func() skill.Tick { return tick },
 	}
 
 	// 破甲两层：40 × (1 - 0.25×2) = 20。
-	bridge.Apply(skillv2.EffectCommand{Payload: skillv2.StatusCommand{
+	bridge.Apply(skill.EffectCommand{Payload: skill.StatusCommand{
 		SourceOwner: 1, Target: 2, Status: 20, DurationTicks: 60, Stacks: 2,
 	}})
 	syncArmor()
@@ -84,7 +84,7 @@ func main() {
 		outcome.Attempted, outcome.HealthDamage, outcome.Critical, defender.Combatant().Health)
 
 	// 驱散按类别、newest-first；属性修饰即时回滚。
-	bridge.Apply(skillv2.EffectCommand{Payload: skillv2.DispelStatusCommand{Target: 2, Category: "physical", Count: 0}})
+	bridge.Apply(skill.EffectCommand{Payload: skill.DispelStatusCommand{Target: 2, Category: "physical", Count: 0}})
 	syncArmor()
 	fmt.Println("defender armor after dispel:", defender.Combatant().Armor)
 }

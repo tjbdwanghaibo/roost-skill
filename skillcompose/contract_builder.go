@@ -4,7 +4,7 @@ import (
 	"errors"
 	"sort"
 
-	"github.com/tjbdwanghaibo/roost-skill/skillv2"
+	"github.com/tjbdwanghaibo/roost-skill/skill"
 )
 
 var (
@@ -12,7 +12,7 @@ var (
 	ErrContractInvalid       = errors.New("skillcompose: composition contract is invalid")
 )
 
-func BuildContract(profiles []SkillProfile, authority skillv2.AuthorityIdentity, policy CompositionPolicy, caller CallerPolicy) (SkillCompositionContract, error) {
+func BuildContract(profiles []SkillProfile, authority skill.AuthorityIdentity, policy CompositionPolicy, caller CallerPolicy) (SkillCompositionContract, error) {
 	if len(profiles) == 0 {
 		return SkillCompositionContract{}, ErrSourceProfileRequired
 	}
@@ -68,7 +68,7 @@ func BuildContract(profiles []SkillProfile, authority skillv2.AuthorityIdentity,
 		if !ok {
 			return SkillCompositionContract{}, ErrContractInvalid
 		}
-		if profile.Metrics.LifetimeTicks < 0 || contract.Budgets.LifetimeTicks > skillv2.Tick(^uint64(0)>>1)-profile.Metrics.LifetimeTicks {
+		if profile.Metrics.LifetimeTicks < 0 || contract.Budgets.LifetimeTicks > skill.Tick(^uint64(0)>>1)-profile.Metrics.LifetimeTicks {
 			return SkillCompositionContract{}, ErrContractInvalid
 		}
 		contract.Budgets.LifetimeTicks += profile.Metrics.LifetimeTicks

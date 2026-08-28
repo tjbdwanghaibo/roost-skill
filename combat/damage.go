@@ -13,7 +13,7 @@ const (
 // Element identifies an element channel for per-element damage multipliers.
 type Element uint16
 
-// Combat result names, a closed vocabulary matching the skillv2 EventContext
+// Combat result names, a closed vocabulary matching the skill EventContext
 // result field and proc filters.
 const (
 	ResultHit     = "hit"

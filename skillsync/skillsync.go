@@ -8,7 +8,7 @@ import (
 	"fmt"
 
 	"github.com/tjbdwanghaibo/cube-core/syncstream"
-	"github.com/tjbdwanghaibo/roost-skill/skillv2"
+	"github.com/tjbdwanghaibo/roost-skill/skill"
 )
 
 const (
@@ -33,35 +33,35 @@ const (
 )
 
 type Header struct {
-	SchemaVersion      uint32                `json:"schema_version"`
-	Kind               RecordKind            `json:"kind"`
-	Tick               skillv2.Tick          `json:"tick,omitempty"`
-	WorldRevision      skillv2.WorldRevision `json:"world_revision,omitempty"`
-	GameplayDigest     string                `json:"gameplay_digest,omitempty"`
-	PresentationDigest string                `json:"presentation_digest,omitempty"`
+	SchemaVersion      uint32              `json:"schema_version"`
+	Kind               RecordKind          `json:"kind"`
+	Tick               skill.Tick          `json:"tick,omitempty"`
+	WorldRevision      skill.WorldRevision `json:"world_revision,omitempty"`
+	GameplayDigest     string              `json:"gameplay_digest,omitempty"`
+	PresentationDigest string              `json:"presentation_digest,omitempty"`
 }
 
 type ManifestRecord struct {
 	Header
-	Plan skillv2.PresentationPlan `json:"plan"`
+	Plan skill.PresentationPlan `json:"plan"`
 }
 
-type StateSnapshot = skillv2.RuntimeStateSnapshot
+type StateSnapshot = skill.RuntimeStateSnapshot
 
 type StateRecord struct {
 	Header
-	Snapshot *skillv2.RuntimeStateSnapshot `json:"snapshot,omitempty"`
-	Delta    *skillv2.StateMutation        `json:"delta,omitempty"`
+	Snapshot *skill.RuntimeStateSnapshot `json:"snapshot,omitempty"`
+	Delta    *skill.StateMutation        `json:"delta,omitempty"`
 }
 
 type PresentationReset struct {
-	Recovery skillv2.PresentationRecoverySnapshot `json:"recovery"`
+	Recovery skill.PresentationRecoverySnapshot `json:"recovery"`
 }
 
 type PresentationRecord struct {
 	Header
-	Event *skillv2.PresentationEvent `json:"event,omitempty"`
-	Reset *PresentationReset         `json:"reset,omitempty"`
+	Event *skill.PresentationEvent `json:"event,omitempty"`
+	Reset *PresentationReset       `json:"reset,omitempty"`
 }
 
 type Projector struct {
@@ -75,7 +75,7 @@ func NewProjector(schemaVersion uint32) (Projector, error) {
 	return Projector{SchemaVersion: schemaVersion}, nil
 }
 
-func (projector Projector) ManifestPacket(observer syncstream.Observer, key int64, plan skillv2.PresentationPlan) (syncstream.Packet, error) {
+func (projector Projector) ManifestPacket(observer syncstream.Observer, key int64, plan skill.PresentationPlan) (syncstream.Packet, error) {
 	record := ManifestRecord{Header: Header{
 		SchemaVersion: projector.SchemaVersion, Kind: RecordManifest,
 		GameplayDigest: plan.Identity.GameplayDigest, PresentationDigest: plan.Identity.PresentationDigest,
@@ -83,7 +83,7 @@ func (projector Projector) ManifestPacket(observer syncstream.Observer, key int6
 	return projector.packet(observer, key, TopicManifest, true, true, record)
 }
 
-func (projector Projector) StateSnapshotPacket(observer syncstream.Observer, key int64, snapshot skillv2.RuntimeStateSnapshot) (syncstream.Packet, error) {
+func (projector Projector) StateSnapshotPacket(observer syncstream.Observer, key int64, snapshot skill.RuntimeStateSnapshot) (syncstream.Packet, error) {
 	record := StateRecord{Header: Header{
 		SchemaVersion: projector.SchemaVersion, Kind: RecordStateFull,
 		Tick: snapshot.Tick, WorldRevision: snapshot.WorldRevision,
@@ -91,7 +91,7 @@ func (projector Projector) StateSnapshotPacket(observer syncstream.Observer, key
 	return projector.packet(observer, key, TopicState, true, true, record)
 }
 
-func (projector Projector) StateDeltaPacket(observer syncstream.Observer, key int64, delta skillv2.StateMutation) (syncstream.Packet, error) {
+func (projector Projector) StateDeltaPacket(observer syncstream.Observer, key int64, delta skill.StateMutation) (syncstream.Packet, error) {
 	if delta.Sequence == 0 || delta.Kind == "" {
 		return syncstream.Packet{}, fmt.Errorf("%w: state delta requires sequence and event kind", ErrRecordInvalid)
 	}
@@ -102,7 +102,7 @@ func (projector Projector) StateDeltaPacket(observer syncstream.Observer, key in
 	return projector.packet(observer, key, TopicState, false, true, record)
 }
 
-func (projector Projector) PresentationPacket(observer syncstream.Observer, key int64, event skillv2.PresentationEvent) (syncstream.Packet, error) {
+func (projector Projector) PresentationPacket(observer syncstream.Observer, key int64, event skill.PresentationEvent) (syncstream.Packet, error) {
 	if event.Sequence == 0 || event.Kind == "" {
 		return syncstream.Packet{}, fmt.Errorf("%w: presentation event requires sequence and kind", ErrRecordInvalid)
 	}
@@ -114,7 +114,7 @@ func (projector Projector) PresentationPacket(observer syncstream.Observer, key 
 	return projector.packet(observer, key, TopicPresentation, false, false, record)
 }
 
-func (projector Projector) PresentationResetPacket(observer syncstream.Observer, key int64, snapshot skillv2.PresentationRecoverySnapshot) (syncstream.Packet, error) {
+func (projector Projector) PresentationResetPacket(observer syncstream.Observer, key int64, snapshot skill.PresentationRecoverySnapshot) (syncstream.Packet, error) {
 	reset := PresentationReset{Recovery: snapshot}
 	record := PresentationRecord{Header: Header{SchemaVersion: projector.SchemaVersion, Kind: RecordPresentationReset, Tick: snapshot.Tick, WorldRevision: snapshot.WorldRevision}, Reset: &reset}
 	return projector.packet(observer, key, TopicPresentation, true, true, record)

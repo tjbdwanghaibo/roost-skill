@@ -4,16 +4,16 @@ import (
 	"errors"
 	"sort"
 
-	"github.com/tjbdwanghaibo/roost-skill/skillv2"
+	"github.com/tjbdwanghaibo/roost-skill/skill"
 )
 
 var ErrProgramRequired = errors.New("skillcompose: compiled program is required")
 
-func ExtractProfile(program *skillv2.Program) (SkillProfile, error) {
+func ExtractProfile(program *skill.Program) (SkillProfile, error) {
 	if program == nil {
 		return SkillProfile{}, ErrProgramRequired
 	}
-	view := skillv2.Inspect(program)
+	view := skill.Inspect(program)
 	profile := SkillProfile{SkillID: view.ID, GameplayDigest: view.Identity.GameplayDigest, Authority: view.Authority, Sources: []SourceIdentity{{SkillID: view.ID, GameplayDigest: view.Identity.GameplayDigest}}, PresentationDigest: view.Identity.PresentationDigest, ActivationMode: view.Cast.Mode, InputKind: view.Input.Kind,
 		Metrics: Metrics{Targets: view.Limits.Targets, Processes: view.Limits.Processes, Mutations: view.Limits.Mutations, EventsPerRoot: view.Limits.EventsPerRoot, RandomSites: view.Limits.RandomSites, LifetimeTicks: view.Limits.LifetimeTicks}}
 	featureSet := map[FeatureKey]struct{}{}

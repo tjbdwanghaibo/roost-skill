@@ -4,12 +4,12 @@
 // units, rates in basis points where 10000 = 100%).
 //
 // The package has zero dependencies so any host can embed it into its own
-// entity model. The skillv2 MemoryHost runs on this exact code, and
+// entity model. The skill MemoryHost runs on this exact code, and
 // combatcomponent wires it into cube-core entities, so test-host math,
 // reference math, and production math cannot diverge.
 //
 // Randomness is intentionally absent: callers roll chances themselves (the
-// skillv2 runtime derives rolls from HMAC keys) and pass the outcomes in as
+// skill runtime derives rolls from HMAC keys) and pass the outcomes in as
 // facts (Dodge, ForceCritical, ...). Wall-clock time is likewise absent;
 // durations are ticks supplied by the caller.
 package combat

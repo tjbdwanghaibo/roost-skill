@@ -1,4 +1,4 @@
-# Skill v2 Visual 与数据同步生产指南
+# Skill Visual 与数据同步生产指南
 
 本文描述当前 `roost-skill`、`cube-core`、`cube-kit` 三仓实现的正式边界、接入顺序、
 恢复语义、运行指标和发布门槛。它既是学习入口，也是生产接入检查表。
@@ -57,12 +57,12 @@ Visual 可以挂在三个位置：
 
 ### 2.2 客户端资源解析
 
-客户端实现 `skillv2.VisualAssetResolver`：
+客户端实现 `skill.VisualAssetResolver`：
 
 ```go
 type VisualAssetResolver interface {
     CatalogIdentity() (revision string, digest string)
-    Resolve(skillv2.VisualView) (skillv2.VisualAsset, error)
+    Resolve(skill.VisualView) (skill.VisualAsset, error)
 }
 ```
 
@@ -243,11 +243,11 @@ go vet ./syncstream
 go test -race ./syncstream -count=1
 
 # roost-skill
-go test ./skillv2 ./skillcompose ./skillsync -count=1
-go vet ./skillv2 ./skillcompose ./skillsync
-go test -race ./skillv2 ./skillcompose ./skillsync -count=1
-go test ./skillv2 -run TestAllFixturesParseCompileInspectAndRun -count=1
-go test -run=^$ -fuzz=FuzzParseGeneratedNeverPanics -fuzztime=10s ./skillv2
+go test ./skill ./skillcompose ./skillsync -count=1
+go vet ./skill ./skillcompose ./skillsync
+go test -race ./skill ./skillcompose ./skillsync -count=1
+go test ./skill -run TestAllFixturesParseCompileInspectAndRun -count=1
+go test -run=^$ -fuzz=FuzzParseGeneratedNeverPanics -fuzztime=10s ./skill
 
 # cube-kit
 go test ./syncstream -count=1
@@ -271,7 +271,7 @@ go test -race ./syncstream -count=1
 上线门槛：普通测试、fixture、vet、race 全绿；故障矩阵全绿；指标和告警已接入；History
 持久化恢复演练成功；客户端能够处理 full/reset；不存在 nil visibility 或无限队列配置。
 
-## 11. v2.0.0 生产闭环补充
+## 11. 当前稳定版生产闭环补充
 
 本节覆盖旧章节中基于“定期 Export/Import、发布后等待 Resync”的保守描述。当前正式
 可靠链路如下：
@@ -340,7 +340,7 @@ go test -race ./... -count=1
 
 # 基准
 go test ./syncstream -run '^$' -bench . -benchmem       # cube-core / cube-kit
-go test ./skillv2 -run '^$' -bench . -benchmem          # roost-skill
+go test ./skill -run '^$' -bench . -benchmem          # roost-skill
 
 # 跨模块：确认失败 -> 重启 -> WAL/outbox 恢复 -> gzip/分片/checksum -> ACK/裁剪
 cd roost-skill/integration/sync-e2e
@@ -398,5 +398,5 @@ outbox, err := skillsync.NewOutbox(skillsync.OutboxOptions{
 
 v2 不读取 v1 checkpoint、旧 packet-only outbox 或 v1 composition contract，也删除了旧的
 Trace/Process/Status 兼容 API。生产升级必须按
-[v2 破坏性升级手册](breaking-upgrade-v2.md) 排空并更换模块导入路径，不能把网络 schema 的
+[稳定包迁移手册](breaking-upgrade-skill-package.md) 更换 Go 导入路径；不能把网络 schema 的
 双版本窗口误用于本地持久化格式。

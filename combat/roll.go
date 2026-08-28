@@ -12,9 +12,9 @@ import (
 // wall-clock or math/rand state: the same key, purpose, and coordinates
 // always yield the same roll, so replays and replicas agree bit-exactly.
 //
-// The key is a match- or cast-scoped secret (skillv2 hosts typically derive
+// The key is a match- or cast-scoped secret (skill hosts typically derive
 // it from the match seed). Coordinates pin the roll to one gameplay moment —
-// for a skillv2 effect command, the recommended coordinates are the event's
+// for a skill effect command, the recommended coordinates are the event's
 // RootEventID, EventID, EffectIndex, and the target entity id, which makes
 // every damage instance roll independently while staying reproducible.
 

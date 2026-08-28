@@ -9,8 +9,8 @@ import (
 	coresync "github.com/tjbdwanghaibo/cube-core/sync"
 	corestream "github.com/tjbdwanghaibo/cube-core/syncstream"
 	streamadapter "github.com/tjbdwanghaibo/cube-kit/syncstream"
+	"github.com/tjbdwanghaibo/roost-skill/skill"
 	"github.com/tjbdwanghaibo/roost-skill/skillsync"
-	"github.com/tjbdwanghaibo/roost-skill/skillv2"
 )
 
 type confirmedBus struct {
@@ -55,11 +55,11 @@ func (bus *confirmedBus) Subscribe(topic string, handler coresync.Handler) (func
 
 type stateConsumer struct{ snapshots int }
 
-func (consumer *stateConsumer) ApplyStateSnapshot(int64, skillv2.RuntimeStateSnapshot) error {
+func (consumer *stateConsumer) ApplyStateSnapshot(int64, skill.RuntimeStateSnapshot) error {
 	consumer.snapshots++
 	return nil
 }
-func (*stateConsumer) ApplyStateDelta(int64, skillv2.StateMutation) error { return nil }
+func (*stateConsumer) ApplyStateDelta(int64, skill.StateMutation) error { return nil }
 
 func TestCrashRecoveryThroughConfirmedFragmentedTransport(t *testing.T) {
 	observer := corestream.Observer{ID: 71, Scope: "match-9"}
@@ -83,7 +83,10 @@ func TestCrashRecoveryThroughConfirmedFragmentedTransport(t *testing.T) {
 	}
 
 	historyDirectory, outboxDirectory := t.TempDir(), t.TempDir()
-	journal, _ := corestream.NewFileHistoryJournal(historyDirectory, 9001)
+	journal, err := corestream.NewFileHistoryJournal(historyDirectory, 9001)
+	if err != nil {
+		t.Fatal(err)
+	}
 	history, err := corestream.NewHistoryWithJournal(corestream.HistoryOptions{SchemaVersion: 1, PruneAcknowledged: true}, journal)
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +97,7 @@ func TestCrashRecoveryThroughConfirmedFragmentedTransport(t *testing.T) {
 		t.Fatal(err)
 	}
 	projector, _ := skillsync.NewProjector(1)
-	runtime := skillv2.NewRuntime(skillv2.NewMemoryHost(skillv2.AuthorityIdentity{}), skillv2.RuntimeOptions{})
+	runtime := skill.NewRuntime(skill.NewMemoryHost(skill.AuthorityIdentity{}), skill.RuntimeOptions{})
 	coordinator, err := skillsync.NewCoordinator(skillsync.CoordinatorOptions{Runtime: runtime, History: history, Publisher: publisher, Projector: projector, Visibility: skillsync.AllowAllVisibility{}, Outbox: outbox, RequireDurableOutbox: true})
 	if err != nil {
 		t.Fatal(err)
@@ -105,13 +108,27 @@ func TestCrashRecoveryThroughConfirmedFragmentedTransport(t *testing.T) {
 	if outbox.Metrics().Pending != 1 || consumer.snapshots != 0 {
 		t.Fatalf("before restart pending=%d snapshots=%d", outbox.Metrics().Pending, consumer.snapshots)
 	}
+	// cube-core v1.8.0 does not expose a journal Close method. A checkpoint is
+	// the supported durable boundary and also releases the resident WAL handle,
+	// which makes the restart lifecycle portable to Windows.
+	if err := history.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
 
 	// Reconstruct all reliable-send state from disk, as a new process would.
-	reopenedJournal, _ := corestream.NewFileHistoryJournal(historyDirectory, 1)
+	reopenedJournal, err := corestream.NewFileHistoryJournal(historyDirectory, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
 	reopenedHistory, err := corestream.NewHistoryWithJournal(corestream.HistoryOptions{SchemaVersion: 1, PruneAcknowledged: true}, reopenedJournal)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := reopenedHistory.Checkpoint(); err != nil {
+			t.Errorf("checkpoint reopened history: %v", err)
+		}
+	})
 	reopenedStore, _ := skillsync.NewFileOutboxStore(outboxDirectory)
 	reopenedOutbox, err := skillsync.NewOutbox(skillsync.OutboxOptions{Store: reopenedStore, RequireDurable: true, FailureRetryDelay: time.Millisecond})
 	if err != nil {

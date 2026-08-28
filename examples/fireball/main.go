@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	skillv2 "github.com/tjbdwanghaibo/roost-skill/skillv2"
+	skill "github.com/tjbdwanghaibo/roost-skill/skill"
 )
 
 const fireballJSON = `{
@@ -45,14 +45,14 @@ const fireballJSON = `{
 
 func main() {
 	// 1. Parse：严格 wire 解析（未知字段、重复键、尾随数据都会被拒绝）。
-	definition, err := skillv2.Parse([]byte(fireballJSON))
+	definition, err := skill.Parse([]byte(fireballJSON))
 	if err != nil {
 		panic(err)
 	}
 
 	// 2. Compile：编译环境提供属性/资源/状态等权威目录，产出不可变 Program。
-	environment := skillv2.DefaultCompileEnvironment()
-	program, diagnostics := skillv2.Compile(definition, environment)
+	environment := skill.DefaultCompileEnvironment()
+	program, diagnostics := skill.Compile(definition, environment)
 	for _, diagnostic := range diagnostics {
 		fmt.Println("diagnostic:", diagnostic)
 	}
@@ -61,19 +61,19 @@ func main() {
 	}
 
 	// 3. Host + Runtime：MemoryHost 是内置参考世界；生产环境换成自己的 Host 实现。
-	host := skillv2.NewMemoryHost(skillv2.AuthorityIdentity{
+	host := skill.NewMemoryHost(skill.AuthorityIdentity{
 		Revision: environment.Revision, Digest: environment.Digest,
 	})
 	host.ConfigureGameplayCatalog(environment.Gameplay)
-	host.UpsertEntity(skillv2.MemoryEntity{ID: 1, Alive: true, Health: 100, MaxHealth: 100,
+	host.UpsertEntity(skill.MemoryEntity{ID: 1, Alive: true, Health: 100, MaxHealth: 100,
 		Resources: map[string]int64{"mana": 30}})
-	host.UpsertEntity(skillv2.MemoryEntity{ID: 2, Alive: true, Health: 100, MaxHealth: 100})
+	host.UpsertEntity(skill.MemoryEntity{ID: 2, Alive: true, Health: 100, MaxHealth: 100})
 
 	var seed [32]byte // 生产环境使用对局级随机种子
-	runtime := skillv2.NewRuntime(host, skillv2.RuntimeOptions{MatchSeed: seed})
+	runtime := skill.NewRuntime(host, skill.RuntimeOptions{MatchSeed: seed})
 
 	// 4. Activate 进入 windup；Advance 推进确定性时间线（tick 为绝对时刻）。
-	castID, err := runtime.Activate(program, skillv2.CastInput{Caster: 1, Target: 2})
+	castID, err := runtime.Activate(program, skill.CastInput{Caster: 1, Target: 2})
 	if err != nil {
 		panic(err)
 	}

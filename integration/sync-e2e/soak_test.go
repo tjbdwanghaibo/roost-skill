@@ -7,8 +7,8 @@ import (
 
 	corestream "github.com/tjbdwanghaibo/cube-core/syncstream"
 	streamadapter "github.com/tjbdwanghaibo/cube-kit/syncstream"
+	"github.com/tjbdwanghaibo/roost-skill/skill"
 	"github.com/tjbdwanghaibo/roost-skill/skillsync"
-	"github.com/tjbdwanghaibo/roost-skill/skillv2"
 )
 
 // TestProtocolSoak is opt-in so normal CI remains fast. Production release CI
@@ -44,7 +44,7 @@ func TestProtocolSoak(t *testing.T) {
 	deadline := time.Now().Add(duration)
 	iterations := 0
 	for time.Now().Before(deadline) {
-		packet, projectErr := projector.StateSnapshotPacket(observer, stream.Key, skillv2.RuntimeStateSnapshot{Tick: skillv2.Tick(iterations)})
+		packet, projectErr := projector.StateSnapshotPacket(observer, stream.Key, skill.RuntimeStateSnapshot{Tick: skill.Tick(iterations)})
 		if projectErr != nil {
 			t.Fatal(projectErr)
 		}

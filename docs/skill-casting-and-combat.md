@@ -49,18 +49,18 @@
 属性目录条目的类型与量纲通过导出常量书写，扩展环境后需要重封 digest：
 
 ```go
-environment := skillv2.DefaultCompileEnvironment()
+environment := skill.DefaultCompileEnvironment()
 environment.Gameplay.Attributes.Entries = append(environment.Gameplay.Attributes.Entries,
-    skillv2.AttributeCatalogEntry{
+    skill.AttributeCatalogEntry{
         Handle: 40, Key: "attack_haste_bp",
-        ValueType: skillv2.ValueKindInt, Quantity: skillv2.QuantityBasisPoints,
+        ValueType: skill.ValueKindInt, Quantity: skill.QuantityBasisPoints,
         Readable: true, Snapshots: []string{"current"}, ModifierOperations: []string{"add"},
         Minimum: 0, Maximum: 20000, Rounding: "toward_zero",
     })
-environment.Digest = skillv2.AuthorityDigest(environment) // 重封，否则 ENVIRONMENT_INVALID
+environment.Digest = skill.AuthorityDigest(environment) // 重封，否则 ENVIRONMENT_INVALID
 ```
 
-Host 的 `Read` 返回值用 `skillv2.AttributeRuntimeValue(catalog, handle, value)` / `skillv2.ResourceRuntimeValue(value)` 构造，量纲自动取自目录。
+Host 的 `Read` 返回值用 `skill.AttributeRuntimeValue(catalog, handle, value)` / `skill.ResourceRuntimeValue(value)` 构造，量纲自动取自目录。
 
 ## combat：零依赖战斗内容电池
 
@@ -69,9 +69,9 @@ Host 的 `Read` 返回值用 `skillv2.AttributeRuntimeValue(catalog, handle, val
 - `AttributeSet`：base + 修饰器（flat 求和 + rateBP 加性求和），`Grant`/`Revoke` 完全可逆、结果与授予顺序无关。
 - `BuffContainer`：叠层（refresh / extend / ignore / independent 策略，independent 每次应用都是独立计时的新实例）、驱散标签、免疫标签、韧性减时（`SetTenacityBP`）、`MaxDurationTicks` 时长上限（在韧性缩放之后钳制），可 `LinkAttributes` 让 buff 修饰器自动物化为属性授予。
 - `ResolveDamage`：twelve_stage_v1 十二段伤害管线（命中回避 → 抗性穿透 → 元素/增伤/减伤 BP → 暴击 → 上下限 → 护盾吸收 → 死亡防护钩子 → 吸血）。随机性外置：闪避/暴击等以预掷事实传入。所有 BP 段夹取非负。
-- skillv2 的 `MemoryHost` 直接运行在这份代码上：参考实现与生产实现共享同一份数学。
+- skill 的 `MemoryHost` 直接运行在这份代码上：参考实现与生产实现共享同一份数学。
 
-**buff 与 skillv2 status 的分工**：skillv2 的 status 是技能程序可见的世界目录语义（选择器过滤、combat hook 的载体），由 Host 拥有；`combat.BuffContainer` 是宿主实体侧的属性/时效容器。典型宿主用 status 承载技能系统语义，用 BuffContainer 承载数值聚合，两者在 Host 的 `Apply(StatusCommand)` 实现里桥接。
+**buff 与 skill status 的分工**：skill 的 status 是技能程序可见的世界目录语义（选择器过滤、combat hook 的载体），由 Host 拥有；`combat.BuffContainer` 是宿主实体侧的属性/时效容器。典型宿主用 status 承载技能系统语义，用 BuffContainer 承载数值聚合，两者在 Host 的 `Apply(StatusCommand)` 实现里桥接。
 
 **AttributeSet → Combatant 投影**：伤害管线读取的是 `Combatant` 平铺字段。宿主用 `Observe` 回调把属性变化投影到 Combatant：
 
@@ -88,14 +88,14 @@ attributes.Observe(func(id combat.AttributeID) {
 
 ## StatusBridge：status 命令落到 combat 容器
 
-`combatcomponent.StatusBridge` 把 skillv2 的 status 域效果命令（`StatusCommand` / `RemoveStatusCommand` / `DispelStatusCommand` / `AttributeModifierCommand`）标准化地落到 combat 容器上，消灭"status 与 buff 双体系各自实现"的第三套状态系统：
+`combatcomponent.StatusBridge` 把 skill 的 status 域效果命令（`StatusCommand` / `RemoveStatusCommand` / `DispelStatusCommand` / `AttributeModifierCommand`）标准化地落到 combat 容器上，消灭"status 与 buff 双体系各自实现"的第三套状态系统：
 
 - catalog 的 `StatusCatalogEntry` 驱动映射：`MaxStacks`/`RefreshPolicy`（refresh/extend/ignore/replace）/`DispelCategory`（作为驱散 Tag）/`TenacityPolicy: scale_duration`/`MaximumDurationTicks`/`AttributeModifiers` 全部翻译为 `combat.BuffSpec`；
 - 免疫标签是世界事实，经 `HasGameplayTag` 回调判定（nil 则关闭该检查）；
 - `AttributeModifierCommand` 以保留 BuffID（`AttributeModifierBuffID`）+ `BuffIndependent` 策略应用——每条命令独立计时，与 MemoryHost 的逐条 modifier 实例语义一致；
 - 事件词表与 MemoryHost 相同（`status_applied` / `status_immune` / `status_removed` / `status_dispelled` / `attribute_modifier_applied`），proc 过滤器两边行为一致；
 - 挂进 `HostAdapter.Status` 字段后，`HostAdapter.Apply` 自动把 status 域命令转给桥（同时 `ResourceCommand` 也由 adapter 落到映射属性上，语义与 MemoryHost 相同：spend 原子校验、no-op 不推进 revision）。
-- **实例句柄操作**（`ModifyStatusInstanceCommand`：偷取/转移/复制、层数与时长编辑）同样由桥处理，授权矩阵与操作门控照搬 MemoryHost（SourceOwnership、Dispellable、Copyable/Transferable/Stealable、DurationOperations 白名单、MaximumDurationTicks 钳制）。**实例寻址契约：`StatusInstanceRef` 的 opaque id 就是 `combat.BuffInstanceID`**——宿主在 Select 返回 status 实例时用 `skillv2.NewStatusInstanceID(uint64(instance.Instance))` 发放句柄。护盾类 status 的盾值搬移不在桥内（护盾池在 `Combatant.Shield`，由宿主的 damage/shield 面管理）。
+- **实例句柄操作**（`ModifyStatusInstanceCommand`：偷取/转移/复制、层数与时长编辑）同样由桥处理，授权矩阵与操作门控照搬 MemoryHost（SourceOwnership、Dispellable、Copyable/Transferable/Stealable、DurationOperations 白名单、MaximumDurationTicks 钳制）。**实例寻址契约：`StatusInstanceRef` 的 opaque id 就是 `combat.BuffInstanceID`**——宿主在 Select 返回 status 实例时用 `skill.NewStatusInstanceID(uint64(instance.Instance))` 发放句柄。护盾类 status 的盾值搬移不在桥内（护盾池在 `Combatant.Shield`，由宿主的 damage/shield 面管理）。
 
 **一处有意的语义差异**：`mul_bp` 修饰在桥/AttributeSet 中按 **基点增量加性叠加**（两个 ×1.2 = +40%，顺序无关、事务回滚可精确逆转），而 MemoryHost 是乘性链（= +44%）。一个游戏只选一种宿主语义并保持一致。
 
@@ -117,4 +117,4 @@ crit := combat.ChanceRoll(matchSeed, "crit", critChanceBP,
 
 - `CombatDao`：持有战斗状态，实现 `entity.DaoInterface` + `checkpoint.DirtyTracker` 契约 + `entity.PersistedDaoLoader`（JSON + schema 版本）与 nest 状态回滚接口。
 - `CombatComponent`：全部 mutator 在 nest 事务内记录 `nest.RecordUndo` 逆操作并按字段掩码（vitals / attributes / buffs）标脏——handler 失败回滚后实体字节一致。
-- `HostAdapter`：实现 `skillv2.Host` 的战斗面（damage/heal/shield 命令、attribute/resource 读取、原子 PayCosts），事件词表与 MemoryHost 一致（`damage_resolved`、`combat_hook_*`、`shield_absorbed`…），proc 过滤器在两种宿主上行为相同。`Select`/`StepProcess`/空间查询/生成物仍由业务 Host 实现。
+- `HostAdapter`：实现 `skill.Host` 的战斗面（damage/heal/shield 命令、attribute/resource 读取、原子 PayCosts），事件词表与 MemoryHost 一致（`damage_resolved`、`combat_hook_*`、`shield_absorbed`…），proc 过滤器在两种宿主上行为相同。`Select`/`StepProcess`/空间查询/生成物仍由业务 Host 实现。

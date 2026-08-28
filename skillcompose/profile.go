@@ -1,10 +1,10 @@
 package skillcompose
 
-import "github.com/tjbdwanghaibo/roost-skill/skillv2"
+import "github.com/tjbdwanghaibo/roost-skill/skill"
 
 type SkillProfile struct {
 	SkillID, GameplayDigest   string
-	Authority                 skillv2.AuthorityIdentity
+	Authority                 skill.AuthorityIdentity
 	Sources                   []SourceIdentity
 	FeatureOrigins            []FeatureOrigin
 	ActivationMode, InputKind string
@@ -28,5 +28,5 @@ type SelectionFact struct {
 }
 type Metrics struct {
 	Targets, Processes, Mutations, EventsPerRoot, RandomSites int
-	LifetimeTicks                                             skillv2.Tick
+	LifetimeTicks                                             skill.Tick
 }

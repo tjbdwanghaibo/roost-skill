@@ -9,7 +9,7 @@ import (
 	"sync"
 
 	"github.com/tjbdwanghaibo/cube-core/syncstream"
-	"github.com/tjbdwanghaibo/roost-skill/skillv2"
+	"github.com/tjbdwanghaibo/roost-skill/skill"
 )
 
 var (
@@ -30,29 +30,29 @@ type ApplyTransaction interface {
 }
 
 type ManifestConsumer interface {
-	ApplyManifest(int64, skillv2.PresentationPlan) error
+	ApplyManifest(int64, skill.PresentationPlan) error
 }
 
 type TransactionalManifestConsumer interface {
-	PrepareManifest(int64, skillv2.PresentationPlan) (ApplyTransaction, error)
+	PrepareManifest(int64, skill.PresentationPlan) (ApplyTransaction, error)
 }
 type StateConsumer interface {
-	ApplyStateSnapshot(int64, skillv2.RuntimeStateSnapshot) error
-	ApplyStateDelta(int64, skillv2.StateMutation) error
+	ApplyStateSnapshot(int64, skill.RuntimeStateSnapshot) error
+	ApplyStateDelta(int64, skill.StateMutation) error
 }
 
 type TransactionalStateConsumer interface {
-	PrepareStateSnapshot(int64, skillv2.RuntimeStateSnapshot) (ApplyTransaction, error)
-	PrepareStateDelta(int64, skillv2.StateMutation) (ApplyTransaction, error)
+	PrepareStateSnapshot(int64, skill.RuntimeStateSnapshot) (ApplyTransaction, error)
+	PrepareStateDelta(int64, skill.StateMutation) (ApplyTransaction, error)
 }
 type PresentationConsumer interface {
 	ResetPresentation(int64, PresentationReset) error
-	ApplyPresentation(int64, skillv2.PresentationEvent) error
+	ApplyPresentation(int64, skill.PresentationEvent) error
 }
 
 type TransactionalPresentationConsumer interface {
 	PreparePresentationReset(int64, PresentationReset) (ApplyTransaction, error)
-	PreparePresentation(int64, skillv2.PresentationEvent) (ApplyTransaction, error)
+	PreparePresentation(int64, skill.PresentationEvent) (ApplyTransaction, error)
 }
 
 type ApplierOptions struct {
@@ -94,7 +94,7 @@ type Applier struct {
 	inflight             map[syncstream.Stream]struct{}
 	stateMutations       map[int64]uint64
 	presentationEvents   map[int64]uint64
-	manifests            map[string]skillv2.PresentationPlan
+	manifests            map[string]skill.PresentationPlan
 }
 
 func NewApplier(options ApplierOptions) (*Applier, error) {
@@ -107,7 +107,7 @@ func NewApplier(options ApplierOptions) (*Applier, error) {
 	if !options.SupportedSchema.Contains(options.SchemaVersion) {
 		return nil, ErrSchemaMismatch
 	}
-	return &Applier{observer: options.Observer, schemaVersion: options.SchemaVersion, supported: options.SupportedSchema, migrator: options.Migrator, manifestConsumer: options.Manifest, stateConsumer: options.State, presentationConsumer: options.Presentation, sequences: make(map[syncstream.Stream]streamCursor), inflight: make(map[syncstream.Stream]struct{}), stateMutations: make(map[int64]uint64), presentationEvents: make(map[int64]uint64), manifests: make(map[string]skillv2.PresentationPlan)}, nil
+	return &Applier{observer: options.Observer, schemaVersion: options.SchemaVersion, supported: options.SupportedSchema, migrator: options.Migrator, manifestConsumer: options.Manifest, stateConsumer: options.State, presentationConsumer: options.Presentation, sequences: make(map[syncstream.Stream]streamCursor), inflight: make(map[syncstream.Stream]struct{}), stateMutations: make(map[int64]uint64), presentationEvents: make(map[int64]uint64), manifests: make(map[string]skill.PresentationPlan)}, nil
 }
 
 func (applier *Applier) Apply(packet syncstream.Packet) (ApplyResult, error) {
@@ -130,7 +130,7 @@ func (applier *Applier) Apply(packet syncstream.Packet) (ApplyResult, error) {
 				applier.sequences = make(map[syncstream.Stream]streamCursor)
 				applier.stateMutations = make(map[int64]uint64)
 				applier.presentationEvents = make(map[int64]uint64)
-				applier.manifests = make(map[string]skillv2.PresentationPlan)
+				applier.manifests = make(map[string]skill.PresentationPlan)
 			}
 			applier.epoch = packet.Epoch
 		}
@@ -322,7 +322,7 @@ func (applier *Applier) applyRecord(packet syncstream.Packet) (preparedRecord, e
 	}
 }
 
-func prepareManifest(consumer ManifestConsumer, key int64, plan skillv2.PresentationPlan) (ApplyTransaction, error) {
+func prepareManifest(consumer ManifestConsumer, key int64, plan skill.PresentationPlan) (ApplyTransaction, error) {
 	if consumer == nil {
 		return nil, nil
 	}
@@ -333,7 +333,7 @@ func prepareManifest(consumer ManifestConsumer, key int64, plan skillv2.Presenta
 	return nil, consumer.ApplyManifest(key, plan)
 }
 
-func prepareStateSnapshot(consumer StateConsumer, key int64, snapshot skillv2.RuntimeStateSnapshot) (ApplyTransaction, error) {
+func prepareStateSnapshot(consumer StateConsumer, key int64, snapshot skill.RuntimeStateSnapshot) (ApplyTransaction, error) {
 	if consumer == nil {
 		return nil, nil
 	}
@@ -344,7 +344,7 @@ func prepareStateSnapshot(consumer StateConsumer, key int64, snapshot skillv2.Ru
 	return nil, consumer.ApplyStateSnapshot(key, snapshot)
 }
 
-func prepareStateDelta(consumer StateConsumer, key int64, mutation skillv2.StateMutation) (ApplyTransaction, error) {
+func prepareStateDelta(consumer StateConsumer, key int64, mutation skill.StateMutation) (ApplyTransaction, error) {
 	if consumer == nil {
 		return nil, nil
 	}
@@ -366,7 +366,7 @@ func preparePresentationReset(consumer PresentationConsumer, key int64, reset Pr
 	return nil, consumer.ResetPresentation(key, reset)
 }
 
-func preparePresentation(consumer PresentationConsumer, key int64, event skillv2.PresentationEvent) (ApplyTransaction, error) {
+func preparePresentation(consumer PresentationConsumer, key int64, event skill.PresentationEvent) (ApplyTransaction, error) {
 	if consumer == nil {
 		return nil, nil
 	}
