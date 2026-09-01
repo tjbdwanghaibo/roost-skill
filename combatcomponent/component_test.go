@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
 	"github.com/tjbdwanghaibo/cube-core/nest"
 
@@ -160,8 +163,8 @@ func TestNestUndoRollbackRestoresCombatStateExactly(t *testing.T) {
 	if got := mustMarshal(t, attacker.component.Dao()); !bytes.Equal(got, attackerBefore) {
 		t.Fatalf("attacker state diverged after rollback")
 	}
-	if defender.component.Dao().DirtyTracker().HasPersistDirty() || attacker.component.Dao().DirtyTracker().HasPersistDirty() {
-		t.Fatal("dirty masks survived rollback")
+	if defender.component.Dao().DirtyTracker().HasSyncDirty() || attacker.component.Dao().DirtyTracker().HasSyncDirty() {
+		t.Fatal("sync dirty masks survived rollback")
 	}
 	// The rolled-back buff's attribute grant must be gone and the original
 	// buff's grant restored.
@@ -173,11 +176,11 @@ func TestNestUndoRollbackRestoresCombatStateExactly(t *testing.T) {
 func TestCombatDaoPersistenceRoundTrip(t *testing.T) {
 	dao := NewCombatDao(42, "game")
 	component := NewCombatComponent(dao)
-	component.InitCombatant(combat.Combatant{Alive: true, Health: 70, MaxHealth: 100, Shield: 5})
-	component.SetAttributeBase(3, 40)
-	component.SetAttributeBounds(3, combat.AttributeBounds{Minimum: 0, Maximum: 500})
-	component.ApplyBuff(combat.BuffSpec{ID: 2, Tags: []combat.Tag{"magic"}, MaxStacks: 3, DurationTicks: 30, Modifiers: []combat.Modifier{{Attribute: 3, RateBP: 5000}}}, 10, 1)
-	component.ApplyBuff(combat.BuffSpec{ID: 2, Tags: []combat.Tag{"magic"}, MaxStacks: 3, DurationTicks: 30, Modifiers: []combat.Modifier{{Attribute: 3, RateBP: 5000}}}, 12, 1)
+	dao.combatant = combat.Combatant{Alive: true, Health: 70, MaxHealth: 100, Shield: 5}
+	dao.attributes.SetBase(3, 40)
+	dao.attributes.SetBounds(3, combat.AttributeBounds{Minimum: 0, Maximum: 500})
+	dao.buffs.Apply(combat.BuffSpec{ID: 2, Tags: []combat.Tag{"magic"}, MaxStacks: 3, DurationTicks: 30, Modifiers: []combat.Modifier{{Attribute: 3, RateBP: 5000}}}, 10, 1)
+	dao.buffs.Apply(combat.BuffSpec{ID: 2, Tags: []combat.Tag{"magic"}, MaxStacks: 3, DurationTicks: 30, Modifiers: []combat.Modifier{{Attribute: 3, RateBP: 5000}}}, 12, 1)
 
 	payload, schemaVersion, err := dao.MarshalPersisted()
 	if err != nil {
@@ -199,7 +202,7 @@ func TestCombatDaoPersistenceRoundTrip(t *testing.T) {
 		t.Fatalf("restored attribute = %d, want 80", got)
 	}
 	// The instance sequence survives, so new applications keep unique ids.
-	id, _ := restored.ApplyBuff(combat.BuffSpec{ID: 9}, 20, 0)
+	id, _ := restoredDao.buffs.Apply(combat.BuffSpec{ID: 9}, 20, 0)
 	if id != 2 {
 		t.Fatalf("restored sequence issued id %d, want 2", id)
 	}
@@ -238,7 +241,74 @@ func TestNestUndoWorksThroughRealHandlers(t *testing.T) {
 	if combatant.Health != 50 || combatant.Shield != 8 {
 		t.Fatalf("combatant = %+v", combatant)
 	}
-	if !target.component.Dao().DirtyTracker().HasPersistDirty() {
-		t.Fatal("committed mutation left no dirty bits")
+	if !target.component.Dao().DirtyTracker().HasSyncDirty() {
+		t.Fatal("committed mutation left no sync dirty bits")
 	}
+}
+
+type combatRecordingCommitter struct {
+	record nest.CommitRecord
+}
+
+func (committer *combatRecordingCommitter) Commit(_ context.Context, record nest.CommitRecord) error {
+	committer.record = record
+	return nil
+}
+
+func TestCombatDaoProducesTransactionLocalMutationAndSyncMask(t *testing.T) {
+	nest.ResetHandlersForTest()
+	t.Cleanup(nest.ResetHandlersForTest)
+	getter := newTestGetter()
+	target, targetID := newCombatTestEntity(t, 9004)
+	getter.Add(target)
+	committer := &combatRecordingCommitter{}
+	engine := nest.NewEngine(
+		nest.NestOptionWithGetter(getter),
+		nest.NestOptionWithTransactionCommitter(committer),
+		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+	)
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = engine.Shutdown(context.Background()) }()
+
+	nest.MustRegisterHandlerWithMeta(nest.NewHandlerName("combat_dataengine_commit"), func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		component := es[0].(*combatTestEntity).component
+		component.InitCombatant(combat.Combatant{Alive: true, Health: 90, MaxHealth: 100})
+		component.SetAttributeBase(3, 40)
+		return nil, nil
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if _, err := engine.Request(context.Background(), nest.NewHandlerName("combat_dataengine_commit"), targetID, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(committer.record.Mutations) != 1 {
+		t.Fatalf("mutations=%d, want 1", len(committer.record.Mutations))
+	}
+	mutation := committer.record.Mutations[0]
+	wantMask := FieldVitals | FieldAttributes
+	if mutation.Mask != wantMask || mutation.Kind != dataengine.MutationPut || mutation.ExpectedVersion != 0 || mutation.NextVersion != 1 {
+		t.Fatalf("mutation=%+v", mutation)
+	}
+	if target.component.Dao().DirtyTracker().Version() != 1 || target.component.Dao().DirtyTracker().SyncDirtyMask() != wantMask {
+		t.Fatalf("tracker=%+v", target.component.Dao().DirtyTracker().Snapshot())
+	}
+}
+
+func TestCombatMutationOutsideTransactionPanicsBeforeStateChange(t *testing.T) {
+	dao := NewCombatDao(42, "game")
+	component := NewCombatComponent(dao)
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatal("mutation outside transaction did not panic")
+		}
+		if dao.combatant.Health != 0 {
+			t.Fatalf("state changed before transaction rejection: %+v", dao.combatant)
+		}
+		if !errors.Is(fmt.Errorf("%v", recovered), nest.ErrTransactionClosed) && !strings.Contains(fmt.Sprint(recovered), nest.ErrTransactionClosed.Error()) {
+			t.Fatalf("panic=%v, want ErrTransactionClosed", recovered)
+		}
+	}()
+	component.InitCombatant(combat.Combatant{Alive: true, Health: 10, MaxHealth: 10})
 }

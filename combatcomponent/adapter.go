@@ -1,9 +1,11 @@
 package combatcomponent
 
 import (
+	"context"
 	"fmt"
 	"math"
 
+	"github.com/tjbdwanghaibo/cube-core/nest"
 	"github.com/tjbdwanghaibo/roost-skill/skill"
 
 	"github.com/tjbdwanghaibo/roost-skill/combat"
@@ -41,6 +43,9 @@ type EffectEvent struct {
 type HostAdapter struct {
 	Resolver Resolver
 	Revision RevisionSource
+	// Committer is required only when the adapter is invoked outside an
+	// existing Nest transaction; that path uses RunDetachedTransaction.
+	Committer nest.TransactionCommitter
 	// Catalog supplies attribute quantities for reads and the critical tag.
 	Catalog skill.GameplayCatalog
 	// SpellTag marks damage commands carrying it as spell damage; zero
@@ -63,6 +68,17 @@ type HostAdapter struct {
 // Apply handles a combat effect command. handled=false means the payload is
 // not a combat command and the business host must process it.
 func (adapter *HostAdapter) Apply(command skill.EffectCommand) (skill.EffectResult, bool, error) {
+	if nest.CurrentRollbackTx() == nil && adapter.handlesMutation(command) {
+		value, err := nest.RunDetachedTransaction(context.Background(), adapter.Committer, "combat_host_apply", func() (any, error) {
+			result, handled, applyErr := adapter.Apply(command)
+			return hostApplyResult{result: result, handled: handled}, applyErr
+		})
+		if value == nil {
+			return skill.EffectResult{}, true, err
+		}
+		result := value.(hostApplyResult)
+		return result.result, result.handled, err
+	}
 	switch payload := command.Payload.(type) {
 	case skill.DamageCommand:
 		result, err := adapter.applyDamage(payload)
@@ -81,6 +97,22 @@ func (adapter *HostAdapter) Apply(command skill.EffectCommand) (skill.EffectResu
 		return adapter.Status.Apply(command)
 	}
 	return skill.EffectResult{}, false, nil
+}
+
+type hostApplyResult struct {
+	result  skill.EffectResult
+	handled bool
+}
+
+func (adapter *HostAdapter) handlesMutation(command skill.EffectCommand) bool {
+	switch command.Payload.(type) {
+	case skill.DamageCommand, skill.HealCommand, skill.ShieldCommand, skill.ResourceCommand:
+		return true
+	case skill.StatusCommand, skill.RemoveStatusCommand, skill.DispelStatusCommand, skill.AttributeModifierCommand, skill.ModifyStatusInstanceCommand:
+		return adapter.Status != nil
+	default:
+		return false
+	}
 }
 
 // applyResource lands a resource gain/spend/set on the mapped attribute
@@ -261,6 +293,15 @@ func (adapter *HostAdapter) Read(request skill.ReadRequest) (skill.ReadResult, b
 // PayCosts atomically validates and deducts every entry against the mapped
 // attribute bases: either every entry is paid or nothing changes.
 func (adapter *HostAdapter) PayCosts(payment skill.CostPayment) (skill.CommitReceipt, error) {
+	if nest.CurrentRollbackTx() == nil {
+		value, err := nest.RunDetachedTransaction(context.Background(), adapter.Committer, "combat_host_pay_costs", func() (any, error) {
+			return adapter.PayCosts(payment)
+		})
+		if value == nil {
+			return skill.CommitReceipt{}, err
+		}
+		return value.(skill.CommitReceipt), err
+	}
 	component, ok := adapter.Resolver.CombatComponent(payment.Entity)
 	if !ok {
 		return skill.CommitReceipt{}, fmt.Errorf("combatcomponent: entity %d has no combat component", payment.Entity)

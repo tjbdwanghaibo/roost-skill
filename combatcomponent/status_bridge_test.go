@@ -1,9 +1,11 @@
 package combatcomponent
 
 import (
+	"context"
 	"errors"
 	"testing"
 
+	"github.com/tjbdwanghaibo/cube-core/nest"
 	"github.com/tjbdwanghaibo/roost-skill/skill"
 
 	"github.com/tjbdwanghaibo/roost-skill/combat"
@@ -11,13 +13,14 @@ import (
 
 func newBridgeFixture() (*StatusBridge, *testRevision, *CombatComponent, *skill.Tick) {
 	target := NewCombatComponent(NewCombatDao(2, "game"))
-	target.InitCombatant(combat.Combatant{Alive: true, Health: 100, MaxHealth: 100})
-	target.SetAttributeBase(3, 100) // haste channel
+	target.dao.combatant = combat.Combatant{Alive: true, Health: 100, MaxHealth: 100}
+	target.dao.attributes.SetBase(3, 100) // haste channel
 	revision := &testRevision{}
 	tick := skill.Tick(0)
 	bridge := &StatusBridge{
-		Resolver: mapResolver{2: target},
-		Revision: revision,
+		Resolver:  mapResolver{2: target},
+		Revision:  revision,
+		Committer: &combatRecordingCommitter{},
 		Catalog: skill.GameplayCatalog{Statuses: skill.StatusCatalog{Entries: []skill.StatusCatalogEntry{
 			{Handle: 10, Key: "burn", Category: "dot", DispelCategory: "magic", Dispellable: true, MaxStacks: 3,
 				AttributeModifiers: []skill.StatusAttributeModifier{{Attribute: 3, Operation: "mul_bp", Value: 12000}}},
@@ -132,10 +135,10 @@ func TestStatusBridgeAttributeModifierIsIndependent(t *testing.T) {
 		t.Fatalf("modifiers = %d, want 140", got)
 	}
 	// Each keeps its own expiry: the first lapses at 10, the second at 14.
-	if expired := target.TickBuffs(10); len(expired) != 1 || target.AttributeCurrent(3) != 120 {
+	if expired := tickBuffsInTransaction(t, bridge, target, 10); len(expired) != 1 || target.AttributeCurrent(3) != 120 {
 		t.Fatalf("first expiry: expired=%d haste=%d", len(expired), target.AttributeCurrent(3))
 	}
-	if expired := target.TickBuffs(14); len(expired) != 1 || target.AttributeCurrent(3) != 100 {
+	if expired := tickBuffsInTransaction(t, bridge, target, 14); len(expired) != 1 || target.AttributeCurrent(3) != 100 {
 		t.Fatalf("second expiry: expired=%d haste=%d", len(expired), target.AttributeCurrent(3))
 	}
 	if _, _, err := bridge.Apply(skill.EffectCommand{Payload: skill.AttributeModifierCommand{Target: 2, Attribute: 3, Operation: "pow", Value: 2, DurationTicks: 1}}); err == nil {
@@ -214,8 +217,8 @@ func TestStatusBridgeModifyInstanceDurationsAndTransfer(t *testing.T) {
 	entries[0].DurationOperations = []string{"add_duration", "refresh"}
 	entries[0].MaximumDurationTicks = 30
 	other := NewCombatComponent(NewCombatDao(3, "game"))
-	other.InitCombatant(combat.Combatant{Alive: true, Health: 50, MaxHealth: 50})
-	other.SetAttributeBase(3, 100)
+	other.dao.combatant = combat.Combatant{Alive: true, Health: 50, MaxHealth: 50}
+	other.dao.attributes.SetBase(3, 100)
 	bridge.Resolver = mapResolver{2: target, 3: other}
 
 	bridge.Apply(skill.EffectCommand{Payload: skill.StatusCommand{SourceOwner: 1, Target: 2, Status: 10, DurationTicks: 20}})
@@ -251,4 +254,15 @@ func TestStatusBridgeModifyInstanceDurationsAndTransfer(t *testing.T) {
 	if len(adopted) != 1 || adopted[0].Source != 9 || other.AttributeCurrent(3) != 120 {
 		t.Fatalf("destination state: %+v haste=%d", adopted, other.AttributeCurrent(3))
 	}
+}
+
+func tickBuffsInTransaction(t *testing.T, bridge *StatusBridge, target *CombatComponent, tick int64) []combat.BuffInstance {
+	t.Helper()
+	value, err := nest.RunDetachedTransaction(context.Background(), bridge.Committer, "combat_test_tick", func() (any, error) {
+		return target.TickBuffs(tick), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value.([]combat.BuffInstance)
 }

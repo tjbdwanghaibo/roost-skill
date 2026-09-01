@@ -1,6 +1,6 @@
 // Package combatcomponent wires the combat content battery into cube-core
 // entities: the CombatDao holds the authoritative combat state behind a
-// checkpoint.DirtyTracker, and the CombatComponent exposes mutators that are
+// dataengine.Tracker, and the CombatComponent exposes mutators that are
 // transaction-safe inside nest handlers — every mutation records its inverse
 // with nest.RecordUndo and marks field-level dirty bits, so a rolled-back
 // handler leaves the entity byte-identical and persistence sees exactly what
@@ -16,9 +16,10 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/tjbdwanghaibo/cube-core/checkpoint"
+	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
 	"github.com/tjbdwanghaibo/cube-core/nest"
+	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/tjbdwanghaibo/roost-skill/combat"
 )
@@ -27,7 +28,7 @@ import (
 const CollectionName = "combat_state"
 
 // combatSchemaVersion versions the persisted payload for forward migration.
-const combatSchemaVersion uint32 = 1
+const combatSchemaVersion uint32 = 2
 
 // Field-level dirty-mask bits.
 const (
@@ -38,10 +39,10 @@ const (
 
 // CombatDao is the persistence-facing holder of an entity's combat state.
 type CombatDao struct {
-	id     int64
-	dbName string
-	coll   string
-	dirty  checkpoint.DirtyTracker
+	id      int64
+	dbName  string
+	coll    string
+	tracker dataengine.Tracker
 
 	combatant  combat.Combatant
 	attributes *combat.AttributeSet
@@ -57,23 +58,24 @@ func NewCombatDao(id int64, dbName string) *CombatDao {
 	return dao
 }
 
-func (dao *CombatDao) Id() int64                              { return dao.id }
-func (dao *CombatDao) SetId(id int64)                         { dao.id = id }
-func (dao *CombatDao) DbName() string                         { return dao.dbName }
-func (dao *CombatDao) CollName() string                       { return dao.coll }
-func (dao *CombatDao) Dirty() entity.IDirty                   { return &dao.dirty }
-func (dao *CombatDao) CleanDirty()                            { dao.dirty.SelfClean() }
-func (dao *CombatDao) DirtyTracker() *checkpoint.DirtyTracker { return &dao.dirty }
+func (dao *CombatDao) Id() int64                         { return dao.id }
+func (dao *CombatDao) SetId(id int64)                    { dao.id = id }
+func (dao *CombatDao) DbName() string                    { return dao.dbName }
+func (dao *CombatDao) CollName() string                  { return dao.coll }
+func (dao *CombatDao) Dirty() entity.IDirty              { return &dao.tracker }
+func (dao *CombatDao) CleanDirty()                       { dao.tracker.SelfClean() }
+func (dao *CombatDao) DirtyTracker() *dataengine.Tracker { return &dao.tracker }
 
 type persistedCombatState struct {
-	Combatant  combat.Combatant            `json:"combatant"`
-	Attributes []combat.AttributeBaseState `json:"attributes,omitempty"`
-	Buffs      combat.BuffContainerState   `json:"buffs"`
+	ID         int64                       `json:"-" bson:"_id"`
+	Combatant  combat.Combatant            `json:"combatant" bson:"combatant"`
+	Attributes []combat.AttributeBaseState `json:"attributes,omitempty" bson:"attributes,omitempty"`
+	Buffs      combat.BuffContainerState   `json:"buffs" bson:"buffs"`
 }
 
 // MarshalPersisted serializes the full combat state for storage.
 func (dao *CombatDao) MarshalPersisted() ([]byte, uint32, error) {
-	payload, err := json.Marshal(persistedCombatState{Combatant: dao.combatant, Attributes: dao.attributes.BaseState(), Buffs: dao.buffs.State()})
+	payload, err := bson.Marshal(dao.persistedState())
 	if err != nil {
 		return nil, 0, err
 	}
@@ -81,18 +83,97 @@ func (dao *CombatDao) MarshalPersisted() ([]byte, uint32, error) {
 }
 
 // RestorePersisted implements entity.PersistedDaoLoader.
-func (dao *CombatDao) RestorePersisted(raw []byte, schemaVersion uint32, _ uint64) error {
+func (dao *CombatDao) RestorePersisted(raw []byte, schemaVersion uint32, version uint64) error {
 	if schemaVersion > combatSchemaVersion {
 		return fmt.Errorf("combatcomponent: schema version %d is newer than supported %d", schemaVersion, combatSchemaVersion)
 	}
-	return dao.restoreState(raw)
+	if schemaVersion < combatSchemaVersion {
+		migrated, err := dao.Migrate(raw, schemaVersion)
+		if err != nil {
+			return err
+		}
+		raw = migrated
+	}
+	var state persistedCombatState
+	if err := bson.Unmarshal(raw, &state); err != nil {
+		return fmt.Errorf("combatcomponent: decode persisted BSON: %w", err)
+	}
+	if state.ID != 0 && state.ID != dao.id {
+		return fmt.Errorf("combatcomponent: persisted id %d does not match dao id %d", state.ID, dao.id)
+	}
+	if err := dao.applyState(state); err != nil {
+		return err
+	}
+	dao.tracker.SetVersion(version)
+	dao.tracker.SelfClean()
+	return nil
+}
+
+func (*CombatDao) SchemaVersion() uint32 { return combatSchemaVersion }
+
+// Migrate converts the legacy schema-1 JSON payload into the BSON document
+// owned by Data Engine. Later schema steps must be added explicitly.
+func (dao *CombatDao) Migrate(raw []byte, from uint32) ([]byte, error) {
+	if from != 1 || combatSchemaVersion != 2 {
+		return nil, fmt.Errorf("combatcomponent: unsupported migration %d -> %d", from, combatSchemaVersion)
+	}
+	var state persistedCombatState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return nil, fmt.Errorf("combatcomponent: decode legacy JSON: %w", err)
+	}
+	state.ID = dao.id
+	return bson.Marshal(state)
+}
+
+func (dao *CombatDao) PrepareMutation(change nest.PersistChange) (dataengine.Mutation, error) {
+	version := dao.tracker.Version()
+	mutation := dataengine.Mutation{
+		Key:  dataengine.DocumentKey{Database: dao.DbName(), Resource: dao.CollName(), ID: dao.Id()},
+		Kind: dataengine.MutationPatch, ExpectedVersion: version, NextVersion: version + 1,
+		Mask: change.Mask, Schema: combatSchemaVersion, Codec: "bson-v2",
+	}
+	if change.Delete {
+		mutation.Kind = dataengine.MutationDelete
+		return mutation, nil
+	}
+	if version == 0 || change.Mask == dataengine.AllFields {
+		payload, _, err := dao.MarshalPersisted()
+		if err != nil {
+			return dataengine.Mutation{}, err
+		}
+		mutation.Kind = dataengine.MutationPut
+		mutation.Data = payload
+		return mutation, nil
+	}
+	set := bson.M{}
+	if change.Mask&FieldVitals != 0 {
+		set["combatant"] = dao.combatant
+	}
+	if change.Mask&FieldAttributes != 0 {
+		set["attributes"] = dao.attributes.BaseState()
+	}
+	if change.Mask&FieldBuffs != 0 {
+		set["buffs"] = dao.buffs.State()
+	}
+	if len(set) == 0 {
+		return dataengine.Mutation{}, fmt.Errorf("combatcomponent: persistence mask %#x has no fields", change.Mask)
+	}
+	patch, err := bson.Marshal(set)
+	if err != nil {
+		return dataengine.Mutation{}, err
+	}
+	mutation.Patch = dataengine.FieldPatch{SetBSON: patch}
+	return mutation, nil
+}
+
+func (dao *CombatDao) AcceptMutation(mutation dataengine.Mutation) error {
+	return dao.tracker.AcceptVersion(mutation.ExpectedVersion, mutation.NextVersion)
 }
 
 // CaptureRollbackState and RestoreRollbackState implement the nest
 // state-rollback contract for RollbackState-policy handlers.
 func (dao *CombatDao) CaptureRollbackState() ([]byte, error) {
-	payload, _, err := dao.MarshalPersisted()
-	return payload, err
+	return json.Marshal(dao.persistedState())
 }
 
 func (dao *CombatDao) RestoreRollbackState(raw []byte) error { return dao.restoreState(raw) }
@@ -102,6 +183,14 @@ func (dao *CombatDao) restoreState(raw []byte) error {
 	if err := json.Unmarshal(raw, &state); err != nil {
 		return fmt.Errorf("combatcomponent: decode combat state: %w", err)
 	}
+	return dao.applyState(state)
+}
+
+func (dao *CombatDao) persistedState() persistedCombatState {
+	return persistedCombatState{ID: dao.id, Combatant: dao.combatant, Attributes: dao.attributes.BaseState(), Buffs: dao.buffs.State()}
+}
+
+func (dao *CombatDao) applyState(state persistedCombatState) error {
 	buffs, err := combat.RestoreBuffContainer(state.Buffs)
 	if err != nil {
 		return fmt.Errorf("combatcomponent: restore buffs: %w", err)
@@ -152,13 +241,17 @@ func (component *CombatComponent) HasBuffTag(tag combat.Tag) bool {
 }
 
 func (component *CombatComponent) markDirty(mask uint64) {
-	component.dao.dirty.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, mask)
+	if err := nest.MarkPersist(component.dao, mask); err != nil {
+		panic(fmt.Errorf("combatcomponent: mark persistence: %w", err))
+	}
+	component.dao.tracker.MarkSync(mask)
 }
 
 // undoVitals registers the inverse of a vitals mutation once per transaction:
 // the first record per field wins, so the closure captures transaction-start
 // state and later mutations in the same handler need no further records.
 func (component *CombatComponent) undoVitals() {
+	component.requireTransaction()
 	dao := component.dao
 	before := dao.combatant
 	nest.RecordUndo(dao, FieldVitals, func() error {
@@ -168,6 +261,7 @@ func (component *CombatComponent) undoVitals() {
 }
 
 func (component *CombatComponent) undoAttributes() {
+	component.requireTransaction()
 	dao := component.dao
 	before := dao.attributes.BaseState()
 	nest.RecordUndo(dao, FieldAttributes, func() error {
@@ -177,6 +271,7 @@ func (component *CombatComponent) undoAttributes() {
 }
 
 func (component *CombatComponent) undoBuffs() {
+	component.requireTransaction()
 	dao := component.dao
 	before := dao.buffs.State()
 	nest.RecordUndo(dao, FieldBuffs, func() error {
@@ -195,6 +290,12 @@ func (component *CombatComponent) undoBuffs() {
 		dao.buffs.LinkAttributes(dao.attributes)
 		return nil
 	})
+}
+
+func (component *CombatComponent) requireTransaction() {
+	if nest.CurrentRollbackTx() == nil {
+		panic(fmt.Errorf("combatcomponent: persistence mutation outside transaction: %w", nest.ErrTransactionClosed))
+	}
 }
 
 // InitCombatant replaces the vitals block (spawn/config load).

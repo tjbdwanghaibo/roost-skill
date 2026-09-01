@@ -31,14 +31,15 @@ func (r *testRevision) CommitEffect(events []EffectEvent) skill.CommitReceipt {
 
 func newAdapterFixture() (*HostAdapter, *testRevision, *CombatComponent, *CombatComponent) {
 	attacker := NewCombatComponent(NewCombatDao(1, "game"))
-	attacker.InitCombatant(combat.Combatant{Alive: true, Health: 80, MaxHealth: 80, Penetration: 10})
+	attacker.dao.combatant = combat.Combatant{Alive: true, Health: 80, MaxHealth: 80, Penetration: 10}
 	defender := NewCombatComponent(NewCombatDao(2, "game"))
-	defender.InitCombatant(combat.Combatant{Alive: true, Health: 100, MaxHealth: 100, Shield: 20, Armor: 40})
-	defender.SetAttributeBase(5, 50) // mana pool
+	defender.dao.combatant = combat.Combatant{Alive: true, Health: 100, MaxHealth: 100, Shield: 20, Armor: 40}
+	defender.dao.attributes.SetBase(5, 50) // mana pool
 	revision := &testRevision{}
 	adapter := &HostAdapter{
-		Resolver: mapResolver{1: attacker, 2: defender},
-		Revision: revision,
+		Resolver:  mapResolver{1: attacker, 2: defender},
+		Revision:  revision,
+		Committer: &combatRecordingCommitter{},
 		ResourceAttribute: func(resource string, handle skill.ResourceHandle) (combat.AttributeID, bool) {
 			if resource == "mana" || handle == 5 {
 				return 5, true
@@ -85,7 +86,7 @@ func TestHostAdapterAppliesDamageWithEvents(t *testing.T) {
 
 func TestHostAdapterHealShieldAndReads(t *testing.T) {
 	adapter, revision, attacker, _ := newAdapterFixture()
-	attacker.ApplyDamage(nil, combat.DamageInput{Amount: 30}, nil)
+	attacker.dao.combatant.Health -= 30
 	healResult, handled, err := adapter.Apply(skill.EffectCommand{Payload: skill.HealCommand{Target: 1, Amount: 100}})
 	if err != nil || !handled || healResult.Payload.(skill.HealEffectResult).Result.Effective != 30 {
 		t.Fatalf("heal = %+v err=%v", healResult.Payload, err)

@@ -1,8 +1,10 @@
 package combatcomponent
 
 import (
+	"context"
 	"fmt"
 
+	"github.com/tjbdwanghaibo/cube-core/nest"
 	"github.com/tjbdwanghaibo/roost-skill/skill"
 
 	"github.com/tjbdwanghaibo/roost-skill/combat"
@@ -34,6 +36,8 @@ const AttributeModifierTag combat.Tag = "attribute_modifier"
 type StatusBridge struct {
 	Resolver Resolver
 	Revision RevisionSource
+	// Committer backs lower-isolation calls made outside a Nest handler.
+	Committer nest.TransactionCommitter
 	// Catalog supplies status policies (stacking, dispel category, immunity
 	// tags, attribute modifiers, tenacity and duration caps).
 	Catalog skill.GameplayCatalog
@@ -48,6 +52,17 @@ type StatusBridge struct {
 // Apply handles a status-domain effect command. handled=false means the
 // payload is not a status command and the caller must process it.
 func (bridge *StatusBridge) Apply(command skill.EffectCommand) (skill.EffectResult, bool, error) {
+	if nest.CurrentRollbackTx() == nil && bridge.handlesMutation(command) {
+		value, err := nest.RunDetachedTransaction(context.Background(), bridge.Committer, "combat_status_apply", func() (any, error) {
+			result, handled, applyErr := bridge.Apply(command)
+			return hostApplyResult{result: result, handled: handled}, applyErr
+		})
+		if value == nil {
+			return skill.EffectResult{}, true, err
+		}
+		result := value.(hostApplyResult)
+		return result.result, result.handled, err
+	}
 	switch payload := command.Payload.(type) {
 	case skill.StatusCommand:
 		result, err := bridge.applyStatus(payload)
@@ -66,6 +81,15 @@ func (bridge *StatusBridge) Apply(command skill.EffectCommand) (skill.EffectResu
 		return result, true, err
 	}
 	return skill.EffectResult{}, false, nil
+}
+
+func (*StatusBridge) handlesMutation(command skill.EffectCommand) bool {
+	switch command.Payload.(type) {
+	case skill.StatusCommand, skill.RemoveStatusCommand, skill.DispelStatusCommand, skill.AttributeModifierCommand, skill.ModifyStatusInstanceCommand:
+		return true
+	default:
+		return false
+	}
 }
 
 // modifyStatusInstance lands instance-handle operations (steal, transfer,
