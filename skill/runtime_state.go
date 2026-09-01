@@ -46,7 +46,9 @@ func (runtime *Runtime) executeStateMutation(cast *castInstance, operation state
 		return StateMutationResult{}, err
 	}
 	cast.visibleRevision = maxRevision(cast.visibleRevision, result.Commit.Revision)
-	runtime.drainHostEvents(cast)
+	if err := runtime.drainHostEvents(cast); err != nil {
+		return StateMutationResult{}, err
+	}
 	return result, nil
 }
 

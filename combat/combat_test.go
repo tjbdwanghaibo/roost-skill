@@ -230,9 +230,12 @@ func TestResolveHealAndAddShield(t *testing.T) {
 	if !ok || added != 25 || target.Shield != 25 {
 		t.Fatalf("shield = %d target = %+v", added, target)
 	}
-	target.Shield = math.MaxInt64
-	if added, _ := AddShield(target, 10); added != 10 || target.Shield != math.MaxInt64 {
+	target.Shield = math.MaxInt64 - 5
+	if added, _ := AddShield(target, 10); added != 5 || target.Shield != math.MaxInt64 {
 		t.Fatalf("saturating shield = %d %d", added, target.Shield)
+	}
+	if added, _ := AddShield(target, 10); added != 0 || target.Shield != math.MaxInt64 {
+		t.Fatalf("full shield no-op = %d %d", added, target.Shield)
 	}
 }
 

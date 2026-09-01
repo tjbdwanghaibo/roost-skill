@@ -278,7 +278,10 @@ func AddShield(target *Combatant, amount int64) (int64, bool) {
 	if target == nil || !target.Alive {
 		return 0, false
 	}
-	added := maxInt64(amount, 0)
-	target.Shield = saturatingInt64Add(target.Shield, added)
-	return added, true
+	attempted := maxInt64(amount, 0)
+	before := target.Shield
+	target.Shield = saturatingInt64Add(before, attempted)
+	// Report the authoritative delta, not the requested amount. This keeps
+	// result payloads and events consistent when the value saturates.
+	return target.Shield - before, true
 }

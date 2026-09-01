@@ -25,6 +25,5 @@ func (runtime *Runtime) payCostList(cast *castInstance, costs []costProgram) err
 		return err
 	}
 	cast.visibleRevision = maxRevision(cast.visibleRevision, receipt.Revision)
-	runtime.drainHostEvents(cast)
-	return nil
+	return runtime.drainHostEvents(cast)
 }

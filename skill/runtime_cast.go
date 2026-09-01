@@ -172,7 +172,9 @@ func (runtime *Runtime) applyHostEffect(cast *castInstance, command EffectComman
 		return EffectResult{}, err
 	}
 	cast.visibleRevision = maxRevision(cast.visibleRevision, result.Commit.Revision)
-	runtime.drainHostEvents(cast)
+	if err := runtime.drainHostEvents(cast); err != nil {
+		return EffectResult{}, err
+	}
 	if outcome, _, known := effectPayloadOutcome(result.Payload); !known || outcome.Succeeded {
 		if continuations, found := presentationEffectMount(cast.program, command.Meta.EffectIndex); found {
 			runtime.emitEffectPresentation(cast, continuations, command.Meta.EffectIndex, result.Commit.Revision, presentationAnchorFromCommand(cast, command.Payload))

@@ -1,18 +1,21 @@
 package skill
 
-func (runtime *Runtime) drainHostEvents(cast *castInstance) {
+func (runtime *Runtime) drainHostEvents(cast *castInstance) error {
 	events := runtime.host.Events(runtime.eventCursor)
 	for _, event := range events {
+		if err := runtime.dispatchEvent(event.Context); err != nil {
+			return err
+		}
 		if event.Cursor > runtime.eventCursor {
 			runtime.eventCursor = event.Cursor
 		}
 		runtime.appendCastEvent(cast, event)
 		runtime.recordStateEvent(event)
-		_ = runtime.dispatchEvent(event.Context)
 	}
 	if compactor, ok := runtime.host.(HostEventCompactor); ok && runtime.eventCursor != 0 {
 		compactor.CompactEventsThrough(runtime.eventCursor)
 	}
+	return nil
 }
 
 func (runtime *Runtime) appendCastEvent(cast *castInstance, event RuntimeEvent) {

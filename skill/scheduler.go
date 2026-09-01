@@ -335,14 +335,16 @@ func (runtime *Runtime) advanceHost(tick Tick) error {
 		return err
 	}
 	runtime.currentTick = tick
-	runtime.collectHostEvents()
+	if err := runtime.collectHostEvents(); err != nil {
+		return err
+	}
 	return runtime.advanceOwnedProcesses()
 }
 
-func (runtime *Runtime) collectHostEvents() {
+func (runtime *Runtime) collectHostEvents() error {
 	events := runtime.host.Events(runtime.eventCursor)
 	if len(events) == 0 {
-		return
+		return nil
 	}
 	castIDs := make([]int, 0, len(runtime.casts))
 	for castID := range runtime.casts {
@@ -350,6 +352,9 @@ func (runtime *Runtime) collectHostEvents() {
 	}
 	sort.Ints(castIDs)
 	for _, event := range events {
+		if err := runtime.dispatchEvent(event.Context); err != nil {
+			return err
+		}
 		if event.Cursor > runtime.eventCursor {
 			runtime.eventCursor = event.Cursor
 		}
@@ -360,11 +365,11 @@ func (runtime *Runtime) collectHostEvents() {
 				runtime.appendCastEvent(cast, event)
 			}
 		}
-		_ = runtime.dispatchEvent(event.Context)
 	}
 	if compactor, ok := runtime.host.(HostEventCompactor); ok && runtime.eventCursor != 0 {
 		compactor.CompactEventsThrough(runtime.eventCursor)
 	}
+	return nil
 }
 
 func scheduledTaskIdentity(payload scheduledTaskPayload) (CastID, uint64) {

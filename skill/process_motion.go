@@ -515,6 +515,8 @@ func (runtime *Runtime) applyProcessMotionStep(cast *castInstance, process *Proc
 	process.HostState = result.State
 	cast.visibleRevision = maxRevision(cast.visibleRevision, result.Commit.Revision)
 	process.visibleRevision = cast.visibleRevision
-	runtime.drainHostEvents(cast)
+	if err := runtime.drainHostEvents(cast); err != nil {
+		return nil, err
+	}
 	return result.Signals, nil
 }

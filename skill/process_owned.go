@@ -43,7 +43,9 @@ func (runtime *Runtime) startEntityProcess(cast *castInstance, template ProcessT
 	}
 	process.visibleRevision = cast.visibleRevision
 	runtime.processes[process.ID] = process
-	runtime.drainHostEvents(cast)
+	if err := runtime.drainHostEvents(cast); err != nil {
+		return err
+	}
 	runtime.emitProcessPresentation(cast, process, PresentationProcessStart, "", "", cast.visibleRevision)
 	if cast.areaCallbackFinish {
 		return runtime.terminateProcess(cast, process, StopCauseCancel, "")
@@ -323,7 +325,9 @@ func (runtime *Runtime) advanceOwnedProcesses() error {
 		}
 		process.NextTick = saturatingTickAdd(runtime.currentTick, interval)
 	}
-	runtime.collectHostEvents()
+	if err := runtime.collectHostEvents(); err != nil {
+		return err
+	}
 	return runtime.reapOwnedProcesses()
 }
 

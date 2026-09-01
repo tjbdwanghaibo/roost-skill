@@ -101,6 +101,8 @@ func mustMarshal(t *testing.T, dao *CombatDao) []byte {
 }
 
 func TestNestUndoRollbackRestoresCombatStateExactly(t *testing.T) {
+	nest.ResetHandlersForTest()
+	t.Cleanup(nest.ResetHandlersForTest)
 	getter := newTestGetter()
 	attacker, attackerID := newCombatTestEntity(t, 9001)
 	defender, defenderID := newCombatTestEntity(t, 9002)
@@ -207,6 +209,8 @@ func TestCombatDaoPersistenceRoundTrip(t *testing.T) {
 }
 
 func TestNestUndoWorksThroughRealHandlers(t *testing.T) {
+	nest.ResetHandlersForTest()
+	t.Cleanup(nest.ResetHandlersForTest)
 	// Committed handlers must keep their mutations and their dirty bits.
 	getter := newTestGetter()
 	target, targetID := newCombatTestEntity(t, 9003)

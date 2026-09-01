@@ -19,6 +19,8 @@
 - `StatusBridge` 支持 `ModifyStatusInstanceCommand`（实例句柄级偷取/转移/复制/层数/时长操作，授权矩阵照搬 MemoryHost）；实例寻址契约：opaque id = `combat.BuffInstanceID`。`combat.BuffContainer` 新增 `SetStacks`/`SetDueTick`/`Adopt`；导出 `skill.NewStatusInstanceID`（外部宿主此前无法构造实例句柄）。
 
 ### Fixed
+- Host event 的消费游标现在只在事件成功分发后推进并 compact；容量拒绝或宿主回调失败会保留失败事件及其后续事件，下一次 tick 可安全重试，不再出现“分发失败但游标已确认”的静默丢事件。
+- `combat.AddShield` 返回饱和后的权威实际增量，不再把请求值误报为 `ShieldResult.Added`；Heal/Shield no-op 不推进 revision、不标 `Changed`、不发误导事件。Nest 集成测试同步清理全局 handler，使重复/race 运行稳定。
 - `RestoreRuntime` 不再经由新建路径压缩宿主事件队列——旧行为在校验之前就把 checkpoint 之后的事件 compact 掉（即使 restore 被拒绝）；`HostEventCompactor` 文档明确保留契约（必须保留最后一次成功 checkpoint 以来的全部事件）。
 - `combat.RestoreBuffContainer` 校验持久化实例（id 唯一、非零、不超过序列号），损坏数据当场报错而不是在远处制造修饰句柄冲突。
 

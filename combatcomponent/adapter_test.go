@@ -2,6 +2,7 @@ package combatcomponent
 
 import (
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-skill/skill"
@@ -105,6 +106,34 @@ func TestHostAdapterHealShieldAndReads(t *testing.T) {
 	}
 	if _, handled, _ := adapter.Read(skill.ReadRequest{Payload: skill.PositionRead{Entity: 2}}); handled {
 		t.Fatal("position read handled by combat adapter")
+	}
+}
+
+func TestHostAdapterShieldReportsEffectiveDeltaAndSkipsNoOpCommit(t *testing.T) {
+	adapter, revision, attacker, _ := newAdapterFixture()
+	attacker.dao.combatant.Shield = math.MaxInt64 - 5
+
+	result, handled, err := adapter.Apply(skill.EffectCommand{Payload: skill.ShieldCommand{Target: 1, Amount: 10}})
+	if err != nil || !handled {
+		t.Fatalf("handled=%v err=%v", handled, err)
+	}
+	payload := result.Payload.(skill.ShieldEffectResult)
+	if payload.Result.Added != 5 || attacker.Combatant().Shield != math.MaxInt64 {
+		t.Fatalf("shield result=%+v state=%d", payload.Result, attacker.Combatant().Shield)
+	}
+	if !result.Commit.Changed || result.Commit.Revision != 1 || len(revision.events) != 1 {
+		t.Fatalf("first receipt=%+v events=%d", result.Commit, len(revision.events))
+	}
+
+	noOp, handled, err := adapter.Apply(skill.EffectCommand{Payload: skill.ShieldCommand{Target: 1, Amount: 10}})
+	if err != nil || !handled {
+		t.Fatalf("no-op handled=%v err=%v", handled, err)
+	}
+	if noOp.Payload.(skill.ShieldEffectResult).Result.Added != 0 || noOp.Commit.Changed {
+		t.Fatalf("no-op result=%+v receipt=%+v", noOp.Payload, noOp.Commit)
+	}
+	if revision.revision != 1 || len(revision.events) != 1 {
+		t.Fatalf("no-op advanced authority: revision=%d events=%d", revision.revision, len(revision.events))
 	}
 }
 

@@ -198,6 +198,12 @@ func (adapter *HostAdapter) applyHeal(command skill.HealCommand) (skill.EffectRe
 	if !alive {
 		return skill.EffectResult{Commit: skill.CommitReceipt{Revision: adapter.Revision.CurrentRevision()}, Payload: skill.HealEffectResult{ResultOutcome: skill.ResultOutcome{FailureReason: skill.ExpectedFailureInvalidTarget}}}, nil
 	}
+	if outcome.Effective == 0 {
+		return skill.EffectResult{
+			Commit:  skill.CommitReceipt{Revision: adapter.Revision.CurrentRevision()},
+			Payload: skill.HealEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.HealResult{Attempted: outcome.Attempted}},
+		}, nil
+	}
 	context := command.Event
 	context.Source, context.Target, context.Result = command.Source, command.Target, "healed"
 	receipt := adapter.Revision.CommitEffect([]EffectEvent{{Kind: "heal_resolved", Entity: command.Target, Context: context}})
@@ -213,6 +219,12 @@ func (adapter *HostAdapter) applyShield(command skill.ShieldCommand) (skill.Effe
 	added, alive := target.AddShield(command.Amount)
 	if !alive {
 		return skill.EffectResult{Commit: skill.CommitReceipt{Revision: adapter.Revision.CurrentRevision()}, Payload: skill.ShieldEffectResult{ResultOutcome: skill.ResultOutcome{FailureReason: skill.ExpectedFailureInvalidTarget}}}, nil
+	}
+	if added == 0 {
+		return skill.EffectResult{
+			Commit:  skill.CommitReceipt{Revision: adapter.Revision.CurrentRevision()},
+			Payload: skill.ShieldEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.ShieldResult{}},
+		}, nil
 	}
 	context := command.Event
 	context.Source, context.Target, context.Result = command.Source, command.Target, "shielded"

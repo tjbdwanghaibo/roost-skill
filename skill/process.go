@@ -217,7 +217,7 @@ func (runtime *Runtime) stopProcess(cast *castInstance, process *ProcessInstance
 	}
 	if cast != nil {
 		cast.visibleRevision = maxRevision(cast.visibleRevision, receipt.Revision)
-		runtime.drainHostEvents(cast)
+		detachErr = errors.Join(detachErr, runtime.drainHostEvents(cast))
 	}
 	return detachErr
 }
@@ -248,7 +248,7 @@ func (runtime *Runtime) detachMotionCarry(cast *castInstance, process *ProcessIn
 	if cast != nil {
 		cast.visibleRevision = maxRevision(cast.visibleRevision, result.Commit.Revision)
 		process.visibleRevision = cast.visibleRevision
-		runtime.drainHostEvents(cast)
+		return runtime.drainHostEvents(cast)
 	} else {
 		process.visibleRevision = maxRevision(process.visibleRevision, result.Commit.Revision)
 	}
