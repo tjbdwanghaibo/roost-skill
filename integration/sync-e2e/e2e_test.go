@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	coresync "github.com/tjbdwanghaibo/cube-core/sync"
+	coresyncbus "github.com/tjbdwanghaibo/cube-core/syncbus"
 	corestream "github.com/tjbdwanghaibo/cube-core/syncstream"
 	streamadapter "github.com/tjbdwanghaibo/cube-kit/syncstream"
 	"github.com/tjbdwanghaibo/roost-skill/skill"
@@ -15,16 +15,16 @@ import (
 
 type confirmedBus struct {
 	mutex    sync.Mutex
-	handlers map[string][]coresync.Handler
+	handlers map[string][]coresyncbus.Handler
 	failNext bool
 	frames   int
 }
 
-func (bus *confirmedBus) Publish(message *coresync.SyncMsg) error { return bus.publish(message) }
-func (bus *confirmedBus) PublishConfirmed(message *coresync.SyncMsg) error {
+func (bus *confirmedBus) Publish(message *coresyncbus.SyncMsg) error { return bus.publish(message) }
+func (bus *confirmedBus) PublishConfirmed(message *coresyncbus.SyncMsg) error {
 	return bus.publish(message)
 }
-func (bus *confirmedBus) publish(message *coresync.SyncMsg) error {
+func (bus *confirmedBus) publish(message *coresyncbus.SyncMsg) error {
 	bus.mutex.Lock()
 	if bus.failNext {
 		bus.failNext = false
@@ -32,7 +32,7 @@ func (bus *confirmedBus) publish(message *coresync.SyncMsg) error {
 		return errors.New("injected broker confirmation failure")
 	}
 	bus.frames++
-	handlers := append([]coresync.Handler(nil), bus.handlers[message.Topic]...)
+	handlers := append([]coresyncbus.Handler(nil), bus.handlers[message.Topic]...)
 	bus.mutex.Unlock()
 	for _, handler := range handlers {
 		copy := *message
@@ -43,10 +43,10 @@ func (bus *confirmedBus) publish(message *coresync.SyncMsg) error {
 	}
 	return nil
 }
-func (bus *confirmedBus) Subscribe(topic string, handler coresync.Handler) (func(), error) {
+func (bus *confirmedBus) Subscribe(topic string, handler coresyncbus.Handler) (func(), error) {
 	bus.mutex.Lock()
 	if bus.handlers == nil {
-		bus.handlers = make(map[string][]coresync.Handler)
+		bus.handlers = make(map[string][]coresyncbus.Handler)
 	}
 	bus.handlers[topic] = append(bus.handlers[topic], handler)
 	bus.mutex.Unlock()

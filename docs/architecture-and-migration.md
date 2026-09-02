@@ -11,7 +11,7 @@ cube-core/syncstream
 roost-skill/skillsync       cube-kit/syncstream
         ^                         ^
         |                         |
-roost-skill/skill        cube-core/sync.ISyncBus
+roost-skill/skill        cube-core/syncbus.ISyncBus
         ^                         ^
         |                         |
      game host                 NATS / JetStream

@@ -319,7 +319,7 @@ outbox, _ := skillsync.NewOutbox(skillsync.OutboxOptions{
     MaxPublishBatch: 512,
 })
 
-publisher, _ := kitsync.NewPublisherWithOptions(bus, kitsync.PublisherOptions{
+publisher, _ := kitroom.NewPublisherWithOptions(bus, kitroom.PublisherOptions{
     RequireConfirmation: true,
     CompressionThreshold: 4 << 10,
     MaxFrameBytes: 256 << 10,
