@@ -115,6 +115,6 @@ crit := combat.ChanceRoll(matchSeed, "crit", critChanceBP,
 
 `combatcomponent` 把 combat 电池接入 cube-core 实体模型：
 
-- `CombatDao`：持有战斗状态，实现 `entity.DaoInterface` + `checkpoint.DirtyTracker` 契约 + `entity.PersistedDaoLoader`（JSON + schema 版本）与 nest 状态回滚接口。
+- `CombatDao`：持有战斗状态，实现 `entity.DaoInterface` + `dataengine.Tracker` 契约 + `entity.PersistedDaoLoader`（BSON + schema 版本）与 nest 状态回滚接口。
 - `CombatComponent`：全部 mutator 在 nest 事务内记录 `nest.RecordUndo` 逆操作并按字段掩码（vitals / attributes / buffs）标脏——handler 失败回滚后实体字节一致。
 - `HostAdapter`：实现 `skill.Host` 的战斗面（damage/heal/shield 命令、attribute/resource 读取、原子 PayCosts），事件词表与 MemoryHost 一致（`damage_resolved`、`combat_hook_*`、`shield_absorbed`…），proc 过滤器在两种宿主上行为相同。`Select`/`StepProcess`/空间查询/生成物仍由业务 Host 实现。
