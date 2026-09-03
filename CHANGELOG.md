@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### Added
+- `scripts/pretag.sh`：打 tag 之前的发布预检（tag major 与 module 路径后缀一致、
+  tag 未存在、无 replace、工作区干净、`GOWORK=off` 下 build/vet/test 通过）。
+  由 tag push 触发的 CI 运行在 tag 已存在之后，能报告但阻止不了。
+
 ### Changed（破坏性：依赖模块路径与 skillsync 主题名）
 
 - 依赖改为 `github.com/tjbdwanghaibo/roost-core v1.10.0`（`integration/sync-e2e` 同时依赖
