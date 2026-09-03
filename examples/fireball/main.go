@@ -7,7 +7,7 @@ import (
 )
 
 const fireballJSON = `{
-  "schema": "cube.skill/v2",
+  "schema": "roost.skill/v2",
   "id": "skill.demo.fireball",
   "name": "Fireball",
   "description": "Windup, commit, then burn the target.",

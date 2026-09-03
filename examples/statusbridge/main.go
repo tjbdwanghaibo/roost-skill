@@ -37,7 +37,7 @@ func (w *world) CommitEffect(events []combatcomponent.EffectEvent) skill.CommitR
 }
 
 func main() {
-	// 两个战斗组件（生产环境由 cube-core 实体工厂持有；这里独立使用）。
+	// 两个战斗组件（生产环境由 roost-core 实体工厂持有；这里独立使用）。
 	attacker := combatcomponent.NewCombatComponent(combatcomponent.NewCombatDao(1, "game"))
 	attacker.InitCombatant(combat.Combatant{Alive: true, Health: 300, MaxHealth: 300, CriticalMultiplierBP: 20000})
 	defender := combatcomponent.NewCombatComponent(combatcomponent.NewCombatDao(2, "game"))

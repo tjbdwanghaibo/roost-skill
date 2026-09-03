@@ -35,7 +35,7 @@ func TestProcResolvesElementAndDamageTypeHandles(t *testing.T) {
 
 func passiveSkillJSON(maxDepth int, required, excluded string) string {
 	return `{
-  "schema":"cube.skill/v2","id":"skill.test.passive","name":"Passive","description":"Runs on damage.",
+  "schema":"roost.skill/v2","id":"skill.test.passive","name":"Passive","description":"Runs on damage.",
   "activation":{"type":"passive_on_damaged","cooldown_scope":"caster","event_filter":{"required_tags":` + required + `,"excluded_tags":` + excluded + `,"elements":[],"damage_types":[],"results":[]},"proc_policy":{"max_depth":` + intString(maxDepth) + `,"allow_self_trigger":false,"once_per_root_event":true}},
   "input_schema":{"type":"none"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast",
   "phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":{"flow":"finish","reason":"done"}}}]

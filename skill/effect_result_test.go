@@ -327,5 +327,5 @@ func compileEffectResultSkill(t *testing.T, flow string) (*Program, CompileEnvir
 }
 
 func effectResultSkillJSON(flow string) string {
-	return `{"schema":"cube.skill/v2","id":"skill.test.effect-result","name":"Result","description":"Typed effect result.","activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"entity"},"cooldown_ticks":0,"costs":[],"memory":{"branch":{"type":"int","default":0}},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
+	return `{"schema":"roost.skill/v2","id":"skill.test.effect-result","name":"Result","description":"Typed effect result.","activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"entity"},"cooldown_ticks":0,"costs":[],"memory":{"branch":{"type":"int","default":0}},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
 }

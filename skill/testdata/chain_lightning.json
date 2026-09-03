@@ -1,5 +1,5 @@
 {
-  "schema": "cube.skill/v2",
+  "schema": "roost.skill/v2",
   "id": "skill.fixture.chain_lightning",
   "name": "Chain Lightning",
   "description": "Damages a bounded chain of selected enemy entities.",

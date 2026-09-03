@@ -7,7 +7,7 @@ import (
 )
 
 const minimalSkillJSON = `{
-  "schema":"cube.skill/v2",
+  "schema":"roost.skill/v2",
   "id":"skill.test.minimal",
   "name":"Minimal",
   "description":"Immediately finishes.",

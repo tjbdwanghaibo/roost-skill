@@ -289,8 +289,8 @@ Host command/result 和 revision。这样通常不需要在整条链路中盲目
 6. `skillsync/applier.go`、`schema.go`：Epoch/schema/sequence/manifest 校验和事务应用；
 7. `presentation_recovery.go`、`presentation_asset_cache.go`：持续表现恢复、可信目录、
    preload/fallback/ref-count/unload；
-8. `cube-core/syncstream`：Epoch、WAL/checkpoint、ACK 裁剪、replay/full fallback 和生命周期；
-9. `cube-kit/syncstream`：确认发布、gzip、分片、SHA-256、有界重组和背压。
+8. `roost-core/syncstream`：Epoch、WAL/checkpoint、ACK 裁剪、replay/full fallback 和生命周期；
+9. `roost-kit/syncstream`：确认发布、gzip、分片、SHA-256、有界重组和背压。
 
 建议按四个小实验验证自己确实理解了实现：
 
@@ -443,8 +443,8 @@ go test -run=^$ -fuzz=FuzzParseGeneratedNeverPanics -fuzztime=30s ./skill
 
 cd integration/sync-e2e
 go test ./... -count=1
-$env:CUBE_SYNC_SOAK='1'
-$env:CUBE_SYNC_SOAK_DURATION='30m'
+$env:ROOST_SYNC_SOAK='1'
+$env:ROOST_SYNC_SOAK_DURATION='30m'
 go test ./... -run TestProtocolSoak -count=1 -timeout 35m
 ```
 

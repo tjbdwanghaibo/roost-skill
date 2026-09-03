@@ -3,7 +3,7 @@ package skillsync
 import (
 	"testing"
 
-	"github.com/tjbdwanghaibo/cube-core/syncstream"
+	"github.com/tjbdwanghaibo/roost-core/syncstream"
 )
 
 func BenchmarkOutboxPutSameStream(b *testing.B) {

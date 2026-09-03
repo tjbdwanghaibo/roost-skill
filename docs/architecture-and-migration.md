@@ -5,21 +5,21 @@
 依赖方向固定为：
 
 ```text
-cube-core/syncstream
+roost-core/syncstream
         ^
         |
-roost-skill/skillsync       cube-kit/syncstream
+roost-skill/skillsync       roost-kit/syncstream
         ^                         ^
         |                         |
-roost-skill/skill        cube-core/syncbus.ISyncBus
+roost-skill/skill        roost-core/syncbus.ISyncBus
         ^                         ^
         |                         |
      game host                 NATS / JetStream
 ```
 
-- `cube-core/syncstream`：只有 Observer、Stream、Packet、序号、ACK、有限历史、
+- `roost-core/syncstream`：只有 Observer、Stream、Packet、序号、ACK、有限历史、
   自动全量恢复、持久化表示和指标，不知道技能、实体渲染或 NATS。
-- `cube-kit/syncstream`：把 Packet 编码为现有 `sync.SyncMsg`，复用 NATS 或
+- `roost-kit/syncstream`：把 Packet 编码为现有 `sync.SyncMsg`，复用 NATS 或
   JetStream；不解释技能 Payload。
 - `roost-skill/skill`：编译和执行权威技能逻辑，产生不可变 PresentationPlan、
   有序 PresentationEvent、RuntimeStateSnapshot 和强类型 StateEvent。
@@ -37,9 +37,9 @@ roost-skill/skill        cube-core/syncbus.ISyncBus
 
 | Topic | 数据 | 可靠性 | 恢复策略 |
 |---|---|---:|---|
-| `cube.skill.manifest` | Program 的视觉表和挂载计划 | 必须可靠 | 重新发送 Full |
-| `cube.skill.state` | Cast 状态全量或业务增量 | 必须可靠 | 历史连续则 replay，否则 Full |
-| `cube.skill.presentation` | cast/effect 播放指令 | 可丢弃、需有序 | 短历史 replay；过期后以状态为准 |
+| `roost.skill.manifest` | Program 的视觉表和挂载计划 | 必须可靠 | 重新发送 Full |
+| `roost.skill.state` | Cast 状态全量或业务增量 | 必须可靠 | 历史连续则 replay，否则 Full |
+| `roost.skill.presentation` | cast/effect 播放指令 | 可丢弃、需有序 | 短历史 replay；过期后以状态为准 |
 
 玩法修改必须先由 Host 成功提交，再产生 effect PresentationEvent。Cast 表现只在
 cast commit 后产生。因此客户端永远不会先看到一个被权威层拒绝的效果。
@@ -53,7 +53,7 @@ cast commit 后产生。因此客户端永远不会先看到一个被权威层�
    `StateEvents` 和 `PollPresentation`。
 4. Coordinator 先执行 VisibilityPolicy，再用 Projector 生成强类型 Packet。
 5. `syncstream.History.Append` 分配 Observer + Stream 独立序号。
-6. Append 成功后推进 source cursor，再交给 `cube-kit/syncstream.Publisher` 发布；
+6. Append 成功后推进 source cursor，再交给 `roost-kit/syncstream.Publisher` 发布；
    publish 失败的数据仍留在 History。
 7. 新 observer、游标过期或 schema/gap 恢复时发送 state full 或 presentation reset。
 
@@ -82,10 +82,10 @@ cast commit 后产生。因此客户端永远不会先看到一个被权威层�
 
 这是三个仓库的原子设计变更，但版本发布必须按依赖方向进行：
 
-1. 发布 `cube-core v1.8.0`（包含 `syncstream`）。
-2. 发布 Go 模块 `github.com/tjbdwanghaibo/roost-skill`（核心 API 固定在 `/skill`；wire schema 仍独立使用 `cube.skill/v2`）。
-3. 发布/确认 `cube-kit v1.8.0` transport adapter。
-4. 具体游戏升级 roost-skill/cube-kit，替换旧导入路径：
+1. 发布 `roost-core v1.10.0`（包含 `syncstream`；模块路径自此为 `roost-core`）。
+2. 发布 Go 模块 `github.com/tjbdwanghaibo/roost-skill`（核心 API 固定在 `/skill`；wire schema 仍独立使用 `roost.skill/v2`）。
+3. 发布/确认 `roost-kit v1.10.0` transport adapter。
+4. 具体游戏升级 roost-skill/roost-kit，替换旧导入路径：
 
 ```text
 github.com/tjbdwanghaibo/cube/game/gameplay/skill
@@ -106,8 +106,8 @@ outbox 格式。导入替换、验证和回滚流程见
 ### 6.1 单模块
 
 ```powershell
-go test ./syncstream -count=1                         # cube-core
-go test ./syncstream -count=1                         # cube-kit
+go test ./syncstream -count=1                         # roost-core
+go test ./syncstream -count=1                         # roost-kit
 go test ./skill ./skillcompose ./skillsync -count=1 # roost-skill
 ```
 
@@ -118,8 +118,8 @@ go test ./skill ./skillcompose ./skillsync -count=1 # roost-skill
 ```text
 go 1.25.0
 use (
-    ./cube-core
-    ./cube-kit
+    ./roost-core
+    ./roost-kit
     ./roost-skill
 )
 ```
@@ -127,8 +127,8 @@ use (
 然后依次执行：
 
 ```powershell
-go test ./...           # cube-core
-go test ./syncstream    # cube-kit adapter
+go test ./...           # roost-core
+go test ./syncstream    # roost-kit adapter
 go test ./...           # roost-skill
 go vet ./...            # 三个模块分别运行
 go test -race ./...     # 三个模块分别运行
@@ -154,5 +154,5 @@ go test -race ./...     # 三个模块分别运行
 ### 6.4 验收门槛
 
 发布前必须同时满足：所有 fixture、普通测试、vet、race 通过；仓库中不存在旧
-导入路径；cube-core 不导入 roost-skill/cube-kit；roost-skill 不导入具体游戏；
-cube-kit adapter 不导入 skill。
+导入路径；roost-core 不导入 roost-skill/roost-kit；roost-skill 不导入具体游戏；
+roost-kit adapter 不导入 skill。

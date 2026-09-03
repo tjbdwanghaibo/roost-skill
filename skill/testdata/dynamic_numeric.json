@@ -1,5 +1,5 @@
 {
-  "schema":"cube.skill/v2",
+  "schema":"roost.skill/v2",
   "id":"skill.fixture.dynamic_numeric",
   "name":"Accelerating Bolt",
   "description":"Launches a bounded projectile whose speed follows a numeric track.",

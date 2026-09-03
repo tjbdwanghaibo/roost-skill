@@ -12,7 +12,7 @@ var promptJSONFence = regexp.MustCompile("(?s)```json\\s*(\\{.*?\\})\\s*```")
 func TestPromptContractsDescribeCanonicalSkillV2(t *testing.T) {
 	system := mustReadPrompt(t, "../docs/ai-skill-system-prompt.md")
 	for _, required := range []string{
-		"cube.skill/v2", "Direct Root", "Skill, Phase, Flow, Select, Effect", "fixed Motion pipeline", "Numeric", "input_schema",
+		"roost.skill/v2", "Direct Root", "Skill, Phase, Flow, Select, Effect", "fixed Motion pipeline", "Numeric", "input_schema",
 		"Attribute", "snapshot", "Gameplay Tag", "Gameplay Element", "CastWindow", "EventFilter", "ProcPolicy", "Area", "enter", "leave",
 		"Combat Resolver", "persistent state", "ability", "status", "owned entity", "result.success", "result.failure", "$local.<name>", "temporal snapshot", "world rollback", "Visual",
 	} {

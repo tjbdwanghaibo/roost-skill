@@ -24,7 +24,7 @@ func TestTemporalProfileCompileRules(t *testing.T) {
 	requireDiagnostic(t, diagnostics, DiagnosticTypeMismatch)
 
 	restoreWrongPolicy := `{"flow":"effect","effect":{"type":"restore_snapshot","target":"$caster","snapshot":{"read_state":{"state":"token","owner":"$caster","snapshot":"current"}},"on_blocked":"warp"}}`
-	json := `{"schema":"cube.skill/v2","id":"skill.test.temporal-policy","name":"Temporal","description":"Temporal profile.","gameplay_tags":["spell"],"activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"none"},"cooldown_ticks":0,"costs":[],"memory":{},"persistent_state":{"token":{"type":"snapshot_token","scope":"owner","default":null,"lifetime":{"duration_ticks":1,"maximum_duration_ticks":1,"on_write":"refresh","clear_on":[]}}},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + restoreWrongPolicy + `}}]}`
+	json := `{"schema":"roost.skill/v2","id":"skill.test.temporal-policy","name":"Temporal","description":"Temporal profile.","gameplay_tags":["spell"],"activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"none"},"cooldown_ticks":0,"costs":[],"memory":{},"persistent_state":{"token":{"type":"snapshot_token","scope":"owner","default":null,"lifetime":{"duration_ticks":1,"maximum_duration_ticks":1,"on_write":"refresh","clear_on":[]}}},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + restoreWrongPolicy + `}}]}`
 	_, diagnostics = Compile(mustParseJSON(t, json), environment)
 	requireDiagnostic(t, diagnostics, DiagnosticShapeInvalid)
 }

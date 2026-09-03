@@ -42,7 +42,7 @@ func TestOwnedEntitySpawnBindingsAreTypedClampedAndCapabilityChecked(t *testing.
 	template.DynamicCollider = true
 	environment.Digest = authorityDigest(environment)
 	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10,"attribute_overrides":{"ability_power":200},"parameter_bindings":{"start_position":"$caster.position","end_position":"$caster.position","length":999}}},{"flow":"finish"}]}`
-	json := `{"schema":"cube.skill/v2","id":"skill.test.owned.bindings","name":"Bindings","description":"Typed spawn bindings.","gameplay_tags":["spell"],"activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"none"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
+	json := `{"schema":"roost.skill/v2","id":"skill.test.owned.bindings","name":"Bindings","description":"Typed spawn bindings.","gameplay_tags":["spell"],"activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"none"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
 	program, diagnostics := Compile(mustParseJSON(t, json), environment)
 	requireNoErrors(t, diagnostics)
 	host := runtimeTestHost(environment)
@@ -605,7 +605,7 @@ func TestOwnedProcessDetachedScopeRejectsCastDependencies(t *testing.T) {
 	}
 	for name, flow := range tests {
 		t.Run(name, func(t *testing.T) {
-			json := `{"schema":"cube.skill/v2","id":"skill.test.owned.detached","name":"Detached","description":"Detached scope.","gameplay_tags":["spell"],"activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"entity"},"cooldown_ticks":0,"costs":[],"memory":{"count":{"type":"int","default":0}},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
+			json := `{"schema":"roost.skill/v2","id":"skill.test.owned.detached","name":"Detached","description":"Detached scope.","gameplay_tags":["spell"],"activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"entity"},"cooldown_ticks":0,"costs":[],"memory":{"count":{"type":"int","default":0}},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
 			_, diagnostics := Compile(mustParseJSON(t, json), DefaultCompileEnvironment())
 			if !diagnosticsHaveErrors(diagnostics) {
 				t.Fatal("expected detached scope diagnostic")
@@ -616,7 +616,7 @@ func TestOwnedProcessDetachedScopeRejectsCastDependencies(t *testing.T) {
 
 func compileOwnedSkill(t *testing.T, id, flow string) (*Program, CompileEnvironment) {
 	t.Helper()
-	json := `{"schema":"cube.skill/v2","id":"skill.test.owned.` + id + `","name":"Owned","description":"Owned entities.","gameplay_tags":["spell"],"activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"none"},"cooldown_ticks":0,"costs":[],"memory":{"count":{"type":"int","default":0}},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
+	json := `{"schema":"roost.skill/v2","id":"skill.test.owned.` + id + `","name":"Owned","description":"Owned entities.","gameplay_tags":["spell"],"activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"none"},"cooldown_ticks":0,"costs":[],"memory":{"count":{"type":"int","default":0}},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
 	environment := DefaultCompileEnvironment()
 	program, diagnostics := Compile(mustParseJSON(t, json), environment)
 	requireNoErrors(t, diagnostics)

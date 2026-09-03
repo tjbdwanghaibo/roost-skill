@@ -1,5 +1,5 @@
 {
-  "schema": "cube.skill/v2",
+  "schema": "roost.skill/v2",
   "id": "skill.test.simple_damage",
   "name": "Simple Damage",
   "description": "Deals physical damage to the input target.",

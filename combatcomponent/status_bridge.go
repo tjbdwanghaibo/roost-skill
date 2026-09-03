@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/tjbdwanghaibo/cube-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-skill/skill"
 
 	"github.com/tjbdwanghaibo/roost-skill/combat"

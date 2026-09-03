@@ -417,7 +417,7 @@ func compileAbilityTestSkill(t *testing.T, environment CompileEnvironment, id, p
 }
 
 func abilityTestSkillJSON(id, policy string, cooldown Tick, flow string) string {
-	return `{"schema":"cube.skill/v2","id":"skill.test.ability.` + id + `","name":"Ability","description":"Ability state.","gameplay_tags":["spell"],"activation":{"type":"active","policy":` + policy + `},"input_schema":{"type":"none"},"cooldown_ticks":` + tickString(cooldown) + `,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
+	return `{"schema":"roost.skill/v2","id":"skill.test.ability.` + id + `","name":"Ability","description":"Ability state.","gameplay_tags":["spell"],"activation":{"type":"active","policy":` + policy + `},"input_schema":{"type":"none"},"cooldown_ticks":` + tickString(cooldown) + `,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
 }
 
 func abilityMutationQuantity(operation string) quantityKind {

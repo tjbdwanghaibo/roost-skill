@@ -4,8 +4,8 @@
 
 - Go 模块：`github.com/tjbdwanghaibo/roost-skill`（自 `v1.5.0` 起可直接 `go get`；不使用 `/v2` major 路径，版本沿 v1.x tag 线演进）
 - 稳定 Go API：`github.com/tjbdwanghaibo/roost-skill/skill`；不再把 wire 版本写进目录名，也不保留 `/skillv2` 兼容包
-- 当前 wire/语义线：JSON schema **`cube.skill/v2`**；编译器语义修订 **`skillv2-compiler-2`**，两者与 Go import 独立演进
-- 依赖基线：`cube-core v1.8.0`；对具体游戏服务器、渲染器、传输层零依赖
+- 当前 wire/语义线：JSON schema **`roost.skill/v2`**；编译器语义修订 **`skillv2-compiler-2`**，两者与 Go import 独立演进
+- 依赖基线：`roost-core v1.10.0`；对具体游戏服务器、渲染器、传输层零依赖
 
 第一次接入请先读[稳定 Skill API](docs/skill.md)；完整文档按角色整理在
 [文档导航](docs/README.md)，从旧包升级见
@@ -27,9 +27,9 @@
 | --- | --- |
 | [`skill`](skill) | 核心：严格 wire 解析 → 编译器（静态证明）→ 不可变 Program → 确定性 Runtime → `Host` 世界边界；含参考宿主 `MemoryHost`、checkpoint/replay、表现计划与表现事件 |
 | [`combat`](combat) | 零依赖战斗内容电池：`AttributeSet`（属性聚合）、`BuffContainer`（叠层/驱散/免疫/韧性）、`ResolveDamage`（twelve_stage_v1 十二段定点伤害管线）、`ChanceRoll`（HMAC 确定性掷点：暴击/闪避概率 → 事实）。`MemoryHost` 直接运行这份代码 |
-| [`combatcomponent`](combatcomponent) | `combat` 接入 cube-core 实体模型：`CombatDao`（脏跟踪 + 持久化）、`CombatComponent`（`nest.RecordUndo` 可逆 mutator）、`HostAdapter`（实现 `skill.Host` 的战斗面：damage/heal/shield/resource 命令与读取/PayCosts）、`StatusBridge`（status/attribute-modifier 命令落到 buff 容器） |
+| [`combatcomponent`](combatcomponent) | `combat` 接入 roost-core 实体模型：`CombatDao`（脏跟踪 + 持久化）、`CombatComponent`（`nest.RecordUndo` 可逆 mutator）、`HostAdapter`（实现 `skill.Host` 的战斗面：damage/heal/shield/resource 命令与读取/PayCosts）、`StatusBridge`（status/attribute-modifier 命令落到 buff 容器） |
 | [`skillcompose`](skillcompose) | 技能组合契约与策略：只经由 Program Inspector 消费编译产物，验证候选技能不超出授予的能力、预算与因果连通性 |
-| [`skillsync`](skillsync) | 客户端同步协议：manifest/state/presentation 三类强类型记录、服务端 Coordinator（可见性过滤、durable outbox）、客户端 Applier，构建于 `cube-core/syncstream` 之上 |
+| [`skillsync`](skillsync) | 客户端同步协议：manifest/state/presentation 三类强类型记录、服务端 Coordinator（可见性过滤、durable outbox）、客户端 Applier，构建于 `roost-core/syncstream` 之上 |
 
 宿主应用拥有玩法目录（catalog）并实现 `skill.Host`；客户端按 Program 身份消费一次 `PresentationPlan`，对局内消费增量 `PresentationEvent`。
 
@@ -113,7 +113,7 @@ import (
 )
 
 const fireballJSON = `{
-  "schema": "cube.skill/v2",
+  "schema": "roost.skill/v2",
   "id": "skill.demo.fireball",
   "name": "Fireball",
   "description": "Windup, commit, then burn the target.",
@@ -233,7 +233,7 @@ event tick=5 kind=tick_advanced entity=0
 
 | 字段 | 说明 |
 | --- | --- |
-| `schema` | 必须是 `"cube.skill/v2"` |
+| `schema` | 必须是 `"roost.skill/v2"` |
 | `id` / `name` / `description` | 技能身份与元信息 |
 | `presentation` | 可选，视觉表现声明（图标、visual ref，见 `wire_visual.go`） |
 | `gameplay_tags` | 玩法标签，须在编译环境的标签目录内 |
@@ -325,9 +325,9 @@ World revision 是防线：查询/命令携带期望 revision，Host 拒绝失�
 
 | Topic | 内容 | 可靠性 | 恢复 |
 | --- | --- | --- | --- |
-| `cube.skill.manifest` | Program 的 `PresentationPlan`（视觉表与挂载计划），按 PresentationDigest 每身份一次 | 必须可靠 | 重发 Full |
-| `cube.skill.state` | `RuntimeStateSnapshot` 全量 / `StateMutation` 增量 | 必须可靠 | 历史连续则 replay，否则 Full |
-| `cube.skill.presentation` | cast/effect 播放指令 | 可丢弃、需有序 | 短历史 replay；过期后以 state 为准 |
+| `roost.skill.manifest` | Program 的 `PresentationPlan`（视觉表与挂载计划），按 PresentationDigest 每身份一次 | 必须可靠 | 重发 Full |
+| `roost.skill.state` | `RuntimeStateSnapshot` 全量 / `StateMutation` 增量 | 必须可靠 | 历史连续则 replay，否则 Full |
+| `roost.skill.presentation` | cast/effect 播放指令 | 可丢弃、需有序 | 短历史 replay；过期后以 state 为准 |
 
 玩法修改先由 Host 成功提交，才产生 effect 表现事件；cast 表现只在 commit 后产生——**客户端永远不会看到一个被权威层拒绝的效果**。服务端 `Coordinator` 做可见性过滤（封闭字段集、default-deny 可选）与 durable outbox，客户端 `Applier` 做 epoch/schema/sequence/manifest 校验后事务应用。完整发布/恢复流程见 [docs/architecture-and-migration.md](docs/architecture-and-migration.md) 与 [docs/visual-sync-production-guide.md](docs/visual-sync-production-guide.md)。
 
@@ -368,24 +368,24 @@ go test ./... -count=1
 - **旧 `/skillv2` → 稳定 `/skill` 的源码升级**：[docs/breaking-upgrade-skill-package.md](docs/breaking-upgrade-skill-package.md)。wire v2 与 compiler semantics 保持不变。
 - **生产部署与发布门槛**：[docs/production-readiness.md](docs/production-readiness.md)。
 
-### 与 cube-core / cube-kit 的关系
+### 与 roost-core / roost-kit 的关系
 
 依赖方向固定，任何反向依赖（指向具体游戏、渲染器、网络实现）都是边界违规：
 
 ```text
-cube-core/syncstream            （通用可靠流：Observer/Packet/序号/ACK/恢复）
+roost-core/syncstream            （通用可靠流：Observer/Packet/序号/ACK/恢复）
         ^
         |
-roost-skill/skillsync           cube-kit/syncstream（Packet ↔ NATS/JetStream 编码）
+roost-skill/skillsync           roost-kit/syncstream（Packet ↔ NATS/JetStream 编码）
         ^
         |
 roost-skill/skill  ←  roost-skill/combat（零依赖，可单独使用）
         ^
         |
-     game host（实现 skill.Host；combatcomponent 提供 cube-core 实体侧的现成接法）
+     game host（实现 skill.Host；combatcomponent 提供 roost-core 实体侧的现成接法）
 ```
 
-`combatcomponent` 依赖 `cube-core`（`entity`/`checkpoint`/`nest`），把 combat 状态做成带脏跟踪、可持久化、handler 回滚后字节一致的实体组件；`skill` 与 `combat` 本身不依赖 cube-core 的运行时设施。
+`combatcomponent` 依赖 `roost-core`（`entity`/`checkpoint`/`nest`），把 combat 状态做成带脏跟踪、可持久化、handler 回滚后字节一致的实体组件；`skill` 与 `combat` 本身不依赖 roost-core 的运行时设施。
 
 ## License
 

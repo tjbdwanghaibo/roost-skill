@@ -15,7 +15,7 @@ github.com/tjbdwanghaibo/roost-skill/skill
 | --- | --- | --- | --- |
 | Go 目录/导入 | `roost-skill/skillv2` | `roost-skill/skill` | 否，源码需重新编译 |
 | Go package 名 | `skillv2` | `skill` | 否 |
-| JSON schema | `cube.skill/v2` | 保持不变 | 否 |
+| JSON schema | `cube.skill/v2` | `roost.skill/v2`（v1.10.0 起；当时尚无旧数据，无需迁移） | 否 |
 | compiler semantics | `skillv2-compiler-2` | 保持不变 | 否 |
 | checkpoint/wire/outbox | 当前格式 | 保持不变 | 不需要格式迁移 |
 | Go module | `github.com/tjbdwanghaibo/roost-skill` | 保持不变 | 否 |
@@ -66,8 +66,7 @@ go test -race ./... -count=1
 rg -n "roost-skill/skillv2|\bskillv2\." .
 ```
 
-最后一条命令应无结果；`skillv2-compiler-2` 和 `cube.skill/v2` 可以继续存在，
-它们是协议常量，不是旧 Go import。
+最后一条命令应无结果；`skillv2-compiler-2` 和 `roost.skill/v2` 是协议常量，不是旧 Go import。
 
 存在嵌套 module 时（例如 integration、examples、工具仓库），需要逐个目录执行
 `go mod tidy` 和测试。根目录的 `go test ./...` 不会进入嵌套 module。
@@ -80,5 +79,5 @@ rg -n "roost-skill/skillv2|\bskillv2\." .
   但同一个源码构建不能同时依赖 `/skillv2` 与 `/skill`。
 - 回滚二进制不需要转换 checkpoint/outbox；回滚源码时恢复旧依赖和 import 即可。
 
-如果后续修改 `cube.skill/v2`、`skillv2-compiler-2`、checkpoint 或 skillsync schema，
+如果后续修改 `roost.skill/v2`、`skillv2-compiler-2`、checkpoint 或 skillsync schema，
 必须另写数据迁移方案，不能复用本次仅针对 Go 包名的结论。

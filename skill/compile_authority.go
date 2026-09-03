@@ -26,7 +26,7 @@ func authorityDigest(environment CompileEnvironment) string {
 		Gameplay          GameplayCatalog
 		Motion            MotionCapabilityCatalog
 		ProcessProperties ProcessPropertyCatalog
-	}{Domain: "cube.skill/v2/gameplay-authority", Revision: environment.Revision, Limits: environment.Limits, Numeric: environment.Numeric, Gameplay: environment.Gameplay, Motion: environment.Motion, ProcessProperties: environment.ProcessProperties}
+	}{Domain: "roost.skill/v2/gameplay-authority", Revision: environment.Revision, Limits: environment.Limits, Numeric: environment.Numeric, Gameplay: environment.Gameplay, Motion: environment.Motion, ProcessProperties: environment.ProcessProperties}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		panic(err)

@@ -6,7 +6,7 @@ import (
 )
 
 func castWindowExpressionJSON(id, windowJSON string) string {
-	return fmt.Sprintf(`{"schema":"cube.skill/v2","id":%q,"name":"Dynamic","description":"Dynamic window.",`+
+	return fmt.Sprintf(`{"schema":"roost.skill/v2","id":%q,"name":"Dynamic","description":"Dynamic window.",`+
 		`"activation":{"type":"active","policy":{"mode":"tap"},"cast_window":%s},`+
 		`"input_schema":{"type":"entity"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast",`+
 		`"phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":10,"damage_type":"physical"}},{"flow":"finish"}]}}}]}`,

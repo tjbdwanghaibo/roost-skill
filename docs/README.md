@@ -2,7 +2,7 @@
 
 本文档目录按使用角色组织。Go 的稳定核心包路径是
 `github.com/tjbdwanghaibo/roost-skill/skill`；JSON wire schema
-`cube.skill/v2` 和编译器语义 `skillv2-compiler-2` 是独立的持久协议版本，
+`roost.skill/v2` 和编译器语义 `skillv2-compiler-2` 是独立的持久协议版本，
 不会再体现在 Go 目录名中。
 
 ## 新接入项目

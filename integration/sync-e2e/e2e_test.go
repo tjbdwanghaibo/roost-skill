@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	coresyncbus "github.com/tjbdwanghaibo/cube-core/syncbus"
-	corestream "github.com/tjbdwanghaibo/cube-core/syncstream"
-	streamadapter "github.com/tjbdwanghaibo/cube-kit/syncstream"
+	coresyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
+	corestream "github.com/tjbdwanghaibo/roost-core/syncstream"
+	streamadapter "github.com/tjbdwanghaibo/roost-kit/syncstream"
 	"github.com/tjbdwanghaibo/roost-skill/skill"
 	"github.com/tjbdwanghaibo/roost-skill/skillsync"
 )
@@ -108,7 +108,7 @@ func TestCrashRecoveryThroughConfirmedFragmentedTransport(t *testing.T) {
 	if outbox.Metrics().Pending != 1 || consumer.snapshots != 0 {
 		t.Fatalf("before restart pending=%d snapshots=%d", outbox.Metrics().Pending, consumer.snapshots)
 	}
-	// cube-core v1.8.0 does not expose a journal Close method. A checkpoint is
+	// roost-core v1.8.0 does not expose a journal Close method. A checkpoint is
 	// the supported durable boundary and also releases the resident WAL handle,
 	// which makes the restart lifecycle portable to Windows.
 	if err := history.Checkpoint(); err != nil {

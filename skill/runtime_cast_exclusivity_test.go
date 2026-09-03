@@ -8,7 +8,7 @@ import (
 
 func compileExclusivitySkill(t *testing.T, id string, windup, recovery, gcd Tick, concurrent bool) (*Program, CompileEnvironment) {
 	t.Helper()
-	json := fmt.Sprintf(`{"schema":"cube.skill/v2","id":%q,"name":"Exclusive","description":"Cast exclusivity.",`+
+	json := fmt.Sprintf(`{"schema":"roost.skill/v2","id":%q,"name":"Exclusive","description":"Cast exclusivity.",`+
 		`"activation":{"type":"active","policy":{"mode":"tap"},"concurrent":%v,"cast_window":{"windup_ticks":%d,"commit_tick":0,"recovery_ticks":%d}},`+
 		`"input_schema":{"type":"entity"},"cooldown_ticks":0,"global_cooldown_ticks":%d,"costs":[],"memory":{},"initial_phase":"cast",`+
 		`"phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":1,"damage_type":"physical"}},{"flow":"finish"}]}}}]}`,

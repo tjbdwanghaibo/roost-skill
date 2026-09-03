@@ -221,7 +221,7 @@ func compilePolicySkill(t *testing.T, id, policy string, cooldown Tick) (*Progra
 	if id == "ammo" {
 		enter = `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"set_memory","name":"entered","value":true}},{"flow":"finish"}]}`
 	}
-	json := `{"schema":"cube.skill/v2","id":"skill.test.policy.` + id + `","name":"Policy","description":"Policy runtime.","activation":{"type":"active","policy":` + policy + `},"input_schema":{"type":"entity"},"cooldown_ticks":` + tickString(cooldown) + `,"costs":` + costs + `,"memory":{"entered":{"type":"bool","default":false}},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + enter + `,"pulse":{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":1,"damage_type":"physical"}},"release":{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":2,"damage_type":"physical"}},{"flow":"finish"}]}}}]}`
+	json := `{"schema":"roost.skill/v2","id":"skill.test.policy.` + id + `","name":"Policy","description":"Policy runtime.","activation":{"type":"active","policy":` + policy + `},"input_schema":{"type":"entity"},"cooldown_ticks":` + tickString(cooldown) + `,"costs":` + costs + `,"memory":{"entered":{"type":"bool","default":false}},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + enter + `,"pulse":{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":1,"damage_type":"physical"}},"release":{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":2,"damage_type":"physical"}},{"flow":"finish"}]}}}]}`
 	return compileRuntimeJSON(t, json)
 }
 

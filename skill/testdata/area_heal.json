@@ -1,5 +1,5 @@
 {
-  "schema": "cube.skill/v2",
+  "schema": "roost.skill/v2",
   "id": "skill.fixture.area_heal",
   "name": "Restoring Circle",
   "description": "Deploys a bounded area that heals valid nearby entities each tick.",

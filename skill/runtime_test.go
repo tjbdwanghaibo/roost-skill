@@ -25,7 +25,7 @@ func TestRuntimeActivateExecutesTypedDamage(t *testing.T) {
 func TestRuntimeExecutesSequenceRepeatIfAndMemory(t *testing.T) {
 	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"set_memory","name":"counter","value":1}},{"flow":"repeat","times":3,"index_as":"i","do":{"flow":"effect","effect":{"type":"add_memory","name":"counter","value":1}}},{"flow":"if","condition":{"op":"eq","args":["$memory.counter",4]},"then":{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":5,"damage_type":"physical"}},"else":{"flow":"finish"}},{"flow":"finish"}]}`
 	// Use a compact skill to keep replacement independent of fixture indentation.
-	json := `{"schema":"cube.skill/v2","id":"skill.test.runtime.memory","name":"Runtime","description":"Runtime flow.","activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"entity"},"cooldown_ticks":0,"costs":[],"memory":{"counter":{"type":"int","default":0}},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
+	json := `{"schema":"roost.skill/v2","id":"skill.test.runtime.memory","name":"Runtime","description":"Runtime flow.","activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"entity"},"cooldown_ticks":0,"costs":[],"memory":{"counter":{"type":"int","default":0}},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
 	definition := mustParseJSON(t, json)
 	environment := DefaultCompileEnvironment()
 	program, diagnostics := Compile(definition, environment)
@@ -94,7 +94,7 @@ func TestRuntimeRejectsCompilerSemanticsAndInputBeforeSideEffects(t *testing.T) 
 
 func TestRuntimeSelectEachUsesScopedLocals(t *testing.T) {
 	flow := `{"flow":"sequence","steps":[{"flow":"select","select":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":100},"filters":[{"type":"alive"},{"type":"not_caster"}],"order":{"by":"distance","direction":"asc"},"limit":2},"consume":{"mode":"each","as":"enemy","do":{"flow":"effect","effect":{"type":"damage","target":"$local.enemy","amount":1,"damage_type":"physical"}}},"on_empty":{"flow":"effect","effect":{"type":"damage","target":"$caster","amount":1,"damage_type":"physical"}}},{"flow":"finish"}]}`
-	json := `{"schema":"cube.skill/v2","id":"skill.test.runtime.select","name":"Runtime","description":"Runtime select.","activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"none"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
+	json := `{"schema":"roost.skill/v2","id":"skill.test.runtime.select","name":"Runtime","description":"Runtime select.","activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"none"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
 	environment := DefaultCompileEnvironment()
 	program, diagnostics := Compile(mustParseJSON(t, json), environment)
 	requireNoErrors(t, diagnostics)
@@ -111,7 +111,7 @@ func TestRuntimeSelectEachUsesScopedLocals(t *testing.T) {
 
 func TestRuntimeKeepsEarlierCommitWhenLaterCommandFails(t *testing.T) {
 	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"resource","target":"$caster","resource":"mana","operation":"add","amount":10}},{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":1,"damage_type":"physical"}},{"flow":"finish"}]}`
-	json := `{"schema":"cube.skill/v2","id":"skill.test.runtime.partial","name":"Runtime","description":"Runtime partial commit.","activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"entity"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
+	json := `{"schema":"roost.skill/v2","id":"skill.test.runtime.partial","name":"Runtime","description":"Runtime partial commit.","activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"entity"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
 	environment := DefaultCompileEnvironment()
 	program, diagnostics := Compile(mustParseJSON(t, json), environment)
 	requireNoErrors(t, diagnostics)
@@ -156,7 +156,7 @@ func TestRuntimePaysCostsBeforeCreatingCast(t *testing.T) {
 
 func TestRuntimeParallelBranchesCommitInDeclarationOrder(t *testing.T) {
 	flow := `{"flow":"sequence","steps":[{"flow":"parallel","branches":[{"flow":"effect","effect":{"type":"resource","target":"$caster","resource":"mana","operation":"set","amount":1}},{"flow":"effect","effect":{"type":"resource","target":"$caster","resource":"mana","operation":"set","amount":2}}]},{"flow":"finish"}]}`
-	json := `{"schema":"cube.skill/v2","id":"skill.test.runtime.parallel","name":"Runtime","description":"Runtime parallel order.","activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"none"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
+	json := `{"schema":"roost.skill/v2","id":"skill.test.runtime.parallel","name":"Runtime","description":"Runtime parallel order.","activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"none"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
 	environment := DefaultCompileEnvironment()
 	program, diagnostics := Compile(mustParseJSON(t, json), environment)
 	requireNoErrors(t, diagnostics)
@@ -171,7 +171,7 @@ func TestRuntimeParallelBranchesCommitInDeclarationOrder(t *testing.T) {
 }
 
 func TestRuntimeGotoEntersTargetPhase(t *testing.T) {
-	json := `{"schema":"cube.skill/v2","id":"skill.test.runtime.goto","name":"Runtime","description":"Runtime goto.","activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"entity"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"first","phases":[{"id":"first","timeout_ticks":0,"on":{"enter":{"flow":"goto","phase":"second"}}},{"id":"second","timeout_ticks":0,"on":{"enter":{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":2,"damage_type":"physical"}},{"flow":"finish"}]}}}]}`
+	json := `{"schema":"roost.skill/v2","id":"skill.test.runtime.goto","name":"Runtime","description":"Runtime goto.","activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"entity"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"first","phases":[{"id":"first","timeout_ticks":0,"on":{"enter":{"flow":"goto","phase":"second"}}},{"id":"second","timeout_ticks":0,"on":{"enter":{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":2,"damage_type":"physical"}},{"flow":"finish"}]}}}]}`
 	environment := DefaultCompileEnvironment()
 	program, diagnostics := Compile(mustParseJSON(t, json), environment)
 	requireNoErrors(t, diagnostics)

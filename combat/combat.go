@@ -5,7 +5,7 @@
 //
 // The package has zero dependencies so any host can embed it into its own
 // entity model. The skill MemoryHost runs on this exact code, and
-// combatcomponent wires it into cube-core entities, so test-host math,
+// combatcomponent wires it into roost-core entities, so test-host math,
 // reference math, and production math cannot diverge.
 //
 // Randomness is intentionally absent: callers roll chances themselves (the

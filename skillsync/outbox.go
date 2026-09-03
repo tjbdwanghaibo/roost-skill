@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/syncstream"
+	"github.com/tjbdwanghaibo/roost-core/syncstream"
 )
 
 var (

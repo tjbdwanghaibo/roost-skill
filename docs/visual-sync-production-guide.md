@@ -1,6 +1,6 @@
 # Skill Visual 与数据同步生产指南
 
-本文描述当前 `roost-skill`、`cube-core`、`cube-kit` 三仓实现的正式边界、接入顺序、
+本文描述当前 `roost-skill`、`roost-core`、`roost-kit` 三仓实现的正式边界、接入顺序、
 恢复语义、运行指标和发布门槛。它既是学习入口，也是生产接入检查表。
 
 ## 1. 最终能力边界
@@ -15,7 +15,7 @@ immutable Program ── InspectPresentationPlan ── VisualAssetResolver ─�
 Runtime ── StateSnapshot / StateDeltas / PresentationSnapshot / PollPresentation
    │
    ▼
-skillsync.Coordinator ── cube-core/syncstream.History ── cube-kit/syncstream
+skillsync.Coordinator ── roost-core/syncstream.History ── roost-kit/syncstream
    │                                                        │
    └──────── observer visibility policy                     └── NATS / JetStream
                                                             │
@@ -26,9 +26,9 @@ client skillsync.Applier ◀─────────────────�
 
 | 仓库 | 正式职责 | 明确不负责 |
 | --- | --- | --- |
-| `cube-core` | 通用有序流、ACK、有限历史、全量恢复、持久化表示、指标 | Skill payload、NATS、可见性规则 |
+| `roost-core` | 通用有序流、ACK、有限历史、全量恢复、持久化表示、指标 | Skill payload、NATS、可见性规则 |
 | `roost-skill` | DSL/Runtime、视觉契约、状态快照、强类型记录、服务端协调器、客户端应用器 | 引擎资源路径、具体消息中间件 |
-| `cube-kit` | Packet 与 SyncMsg 的严格适配、observer 防串流、负载上限、有界发布队列 | 解释 Skill 状态或视觉语义 |
+| `roost-kit` | Packet 与 SyncMsg 的严格适配、observer 防串流、负载上限、有界发布队列 | 解释 Skill 状态或视觉语义 |
 
 具体游戏负责实现生产 `Host`、observer 可见性策略、视觉资产目录解析器、History
 持久化后端，以及客户端 consumer。`MemoryHost` 仅是确定性参考实现。
@@ -157,7 +157,7 @@ client ahead 时，自动调用 provider 生成 full、Append 成新恢复锚点
 生产存储必须用“写临时对象 → fsync/提交 → 原子切换版本”策略，不能直接覆盖唯一副本。
 建议在 match/shard 生命周期边界保存，并在进程退出前再保存一次。
 
-## 6. cube-kit 传输边界
+## 6. roost-kit 传输边界
 
 同步发送使用 `PublisherWithOptions` 设置：
 
@@ -221,9 +221,9 @@ sequence、source sequence 和 resync reason，但不要记录完整敏感 paylo
 
 发布顺序固定：
 
-1. 发布含新 syncstream 的 `cube-core`；
+1. 发布含新 syncstream 的 `roost-core`；
 2. `roost-skill` 升级到正式 core 版本并移除本地 replace，再发布；
-3. `cube-kit` 升级 core 版本并移除本地 replace，再发布；
+3. `roost-kit` 升级 core 版本并移除本地 replace，再发布；
 4. 游戏服务接入 Coordinator/visibility/history store；
 5. 客户端先支持新 schema 和 manifest catalog，再启用服务端流量。
 
@@ -237,7 +237,7 @@ Schema 或视觉目录升级采用双版本窗口：先部署能读取新旧版�
 以下命令在三个仓库分别执行，并设置 `GOWORK=off` 验证模块边界：
 
 ```powershell
-# cube-core
+# roost-core
 go test ./syncstream -count=1
 go vet ./syncstream
 go test -race ./syncstream -count=1
@@ -249,7 +249,7 @@ go test -race ./skill ./skillcompose ./skillsync -count=1
 go test ./skill -run TestAllFixturesParseCompileInspectAndRun -count=1
 go test -run=^$ -fuzz=FuzzParseGeneratedNeverPanics -fuzztime=10s ./skill
 
-# cube-kit
+# roost-kit
 go test ./syncstream -count=1
 go vet ./syncstream
 go test -race ./syncstream -count=1
@@ -339,7 +339,7 @@ go vet ./...
 go test -race ./... -count=1
 
 # 基准
-go test ./syncstream -run '^$' -bench . -benchmem       # cube-core / cube-kit
+go test ./syncstream -run '^$' -bench . -benchmem       # roost-core / roost-kit
 go test ./skill -run '^$' -bench . -benchmem          # roost-skill
 
 # 跨模块：确认失败 -> 重启 -> WAL/outbox 恢复 -> gzip/分片/checksum -> ACK/裁剪
@@ -347,12 +347,12 @@ cd roost-skill/integration/sync-e2e
 go test ./... -count=1
 
 # 发布前 30 分钟 soak（可先用 5s 验证任务配置）
-$env:CUBE_SYNC_SOAK='1'
-$env:CUBE_SYNC_SOAK_DURATION='30m'
+$env:ROOST_SYNC_SOAK='1'
+$env:ROOST_SYNC_SOAK_DURATION='30m'
 go test ./... -run TestProtocolSoak -count=1 -timeout 35m
 ```
 
-发布顺序为 `cube-core v1.8.0 → roost-skill v1.7.0+ → cube-kit v1.8.0 → 业务服务/客户端`。
+发布顺序为 `roost-core v1.10.0 → roost-skill → roost-kit v1.10.0 → 业务服务/客户端`。
 `roost-skill` 的模块路径是 `github.com/tjbdwanghaibo/roost-skill`。生产模块只依赖
 语义版本；相对 `replace` 仅存在于 `integration/sync-e2e` 测试模块。正式发布 tag 前应先用
 临时 workspace 执行三仓全量测试，然后在无 workspace 环境验证已发布版本可解析。

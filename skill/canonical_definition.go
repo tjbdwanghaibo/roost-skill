@@ -15,7 +15,7 @@ func canonicalDefinitionDigest(definition *Definition) string {
 	if err != nil {
 		panic(err)
 	}
-	return stableDigest("cube.skill/v2/source-document", payload)
+	return stableDigest("roost.skill/v2/source-document", payload)
 }
 
 func stableDigest(domain string, payload []byte) string {

@@ -80,7 +80,7 @@ func compileCastWindowSkill(t *testing.T, refund bool) (*Program, CompileEnviron
 	if refund {
 		refundJSON = "true"
 	}
-	json := `{"schema":"cube.skill/v2","id":"skill.test.cast-window","name":"Window","description":"Cast window.","activation":{"type":"active","policy":{"mode":"tap"},"cast_window":{"windup_ticks":5,"commit_tick":3,"recovery_ticks":4,"movement":"locked","turning":"allowed","interrupt_tags":[],"refund_before_commit":` + refundJSON + `}},"input_schema":{"type":"entity"},"cooldown_ticks":10,"costs":[{"resource":"mana","amount":5}],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":10,"damage_type":"physical"}},{"flow":"finish"}]}}}]}`
+	json := `{"schema":"roost.skill/v2","id":"skill.test.cast-window","name":"Window","description":"Cast window.","activation":{"type":"active","policy":{"mode":"tap"},"cast_window":{"windup_ticks":5,"commit_tick":3,"recovery_ticks":4,"movement":"locked","turning":"allowed","interrupt_tags":[],"refund_before_commit":` + refundJSON + `}},"input_schema":{"type":"entity"},"cooldown_ticks":10,"costs":[{"resource":"mana","amount":5}],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":10,"damage_type":"physical"}},{"flow":"finish"}]}}}]}`
 	return compileRuntimeJSON(t, json)
 }
 

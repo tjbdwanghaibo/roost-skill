@@ -8,7 +8,7 @@ import (
 )
 
 const minimalSkillWithoutPolicy = `{
-  "schema":"cube.skill/v2",
+  "schema":"roost.skill/v2",
   "id":"skill.test.default_policy",
   "name":"Default Policy",
   "description":"Uses the default tap policy.",
@@ -42,7 +42,7 @@ func TestNormalizeDefaultsTapPolicy(t *testing.T) {
 
 func TestNormalizeWalkValuesVisitsEachSourceOnce(t *testing.T) {
 	input := `{
-  "schema":"cube.skill/v2",
+  "schema":"roost.skill/v2",
   "id":"skill.test.visitor",
   "name":"Visitor",
   "description":"Exercises value traversal.",
@@ -152,7 +152,7 @@ func TestNormalizeRejectsInvalidIdentifiersWithSourcePath(t *testing.T) {
 
 func TestNormalizeSourceMapIncludesSelectVariantNodes(t *testing.T) {
 	input := `{
-  "schema":"cube.skill/v2","id":"skill.test.source_map","name":"Source Map","description":"Tracks variant nodes.",
+  "schema":"roost.skill/v2","id":"skill.test.source_map","name":"Source Map","description":"Tracks variant nodes.",
   "activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"none"},
   "cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast",
   "phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":{

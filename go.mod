@@ -3,7 +3,7 @@ module github.com/tjbdwanghaibo/roost-skill
 go 1.25.0
 
 require (
-	github.com/tjbdwanghaibo/cube-core v1.8.0
+	github.com/tjbdwanghaibo/roost-core v1.10.0
 	go.mongodb.org/mongo-driver/v2 v2.6.0
 )
 

@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### Changed（破坏性：依赖模块路径与 skillsync 主题名）
+
+- 依赖改为 `github.com/tjbdwanghaibo/roost-core v1.10.0`（`integration/sync-e2e` 同时依赖
+  `roost-kit v1.10.0`）；模块路径随 core/kit 改名。
+- `skillsync` 主题常量 `cube.skill.manifest/state/presentation` → `roost.skill.*`。发布端与
+  应用端在同一模块内始终一致；跨版本滚动升级期间两端会互相听不见，请同批升级。
+- JSON schema 标识 `cube.skill/v2` → `roost.skill/v2`，随之所有摘要域字符串（`source-document`、
+  `gameplay-program`、`presentation-program`、`visual-manifest`、`gameplay-authority`、`cast-random`、
+  `random-site`）一并改名。**不做兼容**：它们是 hash 的输入，旧名下的已存摘要与定义文件不再被接受。
+  改名时尚无旧数据，因此不需要迁移；此后若已有定义文件，把 `"schema"` 字段改为 `roost.skill/v2` 并重新编译。
+- CI checkout 路径 `cube-skill` → `roost-skill`；文档全部改为 roost 命名。
+
 ### Changed
 - 核心 Go API 从 `/skillv2` 收敛为唯一稳定包 `/skill`，不保留双包兼容层；JSON schema `cube.skill/v2`、compiler semantics `skillv2-compiler-2` 和现有 checkpoint/wire 格式保持不变。仓库内消费者、示例、CI、codegen 接线和文档全部迁移。
 - 依赖升级：`cube-core` → v1.8.0，（e2e）`cube-kit` → v1.8.0（lockstep 两层 + configdata 管线与两轮复审修复）；docs 版本引用同步（CI 门禁"docs versions match go.mod"），全量测试与 sync-e2e 在新版本上通过。skill 运行时的确定性契约（定点/注入随机/无墙钟）正是 core lockstep 客户端模拟的前提，两侧现已同版本对齐。

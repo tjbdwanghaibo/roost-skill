@@ -1,4 +1,4 @@
-// Package skillsync projects skill runtime data onto cube-core's ordered,
+// Package skillsync projects skill runtime data onto roost-core's ordered,
 // transport-neutral syncstream envelopes.
 package skillsync
 
@@ -7,14 +7,14 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/tjbdwanghaibo/cube-core/syncstream"
+	"github.com/tjbdwanghaibo/roost-core/syncstream"
 	"github.com/tjbdwanghaibo/roost-skill/skill"
 )
 
 const (
-	TopicManifest     = "cube.skill.manifest"
-	TopicState        = "cube.skill.state"
-	TopicPresentation = "cube.skill.presentation"
+	TopicManifest     = "roost.skill.manifest"
+	TopicState        = "roost.skill.state"
+	TopicPresentation = "roost.skill.presentation"
 )
 
 var (

@@ -5,7 +5,7 @@
 ## 迁移说明（必读）
 
 - **编译器语义修订升级为 `skillv2-compiler-2`。** 新增的 `concurrent`、`global_cooldown_ticks`、窗口表达式字段进入 gameplay digest，同一定义在新旧版本编译出的 digest 不同。v1.2.x 产生的 checkpoint、回放记录与 skillcompose 契约在新版本下**无法解析**（会得到明确错误而非静默失败）：升级时需要全量重编译技能定义、丢弃旧 checkpoint（或先在旧版本完成排空）并重签契约。
-- **Go 模块路径已改为 `github.com/tjbdwanghaibo/roost-skill`**（与仓库名一致，不再使用 `/v2` major 路径）。自 `v1.5.0` tag 起可直接 `go get`；wire schema 仍是 `cube.skill/v2`，技能定义 JSON 不受影响。
+- **Go 模块路径已改为 `github.com/tjbdwanghaibo/roost-skill`**（与仓库名一致，不再使用 `/v2` major 路径）。自 `v1.5.0` tag 起可直接 `go get`；wire schema 仍是 `roost.skill/v2`，技能定义 JSON 不受影响。
 
 ## 施法互斥与全局冷却
 
@@ -111,9 +111,9 @@ crit := combat.ChanceRoll(matchSeed, "crit", critChanceBP,
 
 推荐坐标取效果命令 Event 上的 `RootEventID`/`EventID`/`EffectIndex` 加目标实体——每个伤害实例独立掷点且可复现；不同 purpose（"crit"/"dodge"）在同一坐标下相互独立。
 
-## combatcomponent：cube-core 集成
+## combatcomponent：roost-core 集成
 
-`combatcomponent` 把 combat 电池接入 cube-core 实体模型：
+`combatcomponent` 把 combat 电池接入 roost-core 实体模型：
 
 - `CombatDao`：持有战斗状态，实现 `entity.DaoInterface` + `dataengine.Tracker` 契约 + `entity.PersistedDaoLoader`（BSON + schema 版本）与 nest 状态回滚接口。
 - `CombatComponent`：全部 mutator 在 nest 事务内记录 `nest.RecordUndo` 逆操作并按字段掩码（vitals / attributes / buffs）标脏——handler 失败回滚后实体字节一致。

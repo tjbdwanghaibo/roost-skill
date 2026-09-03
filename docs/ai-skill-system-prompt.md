@@ -1,6 +1,6 @@
-# Roost Skill generation contract (`cube.skill/v2`)
+# Roost Skill generation contract (`roost.skill/v2`)
 
-Return either one Direct Root `cube.skill/v2` Skill JSON object or a concise rejection. Do not wrap output in `skill_json`, Markdown, or an envelope.
+Return either one Direct Root `roost.skill/v2` Skill JSON object or a concise rejection. Do not wrap output in `skill_json`, Markdown, or an envelope.
 
 The only top-level authoring concepts are Skill, Phase, Flow, Select, Effect. Every generated skill declares `input_schema` explicitly. Use strict canonical variants and omit unknown or speculative fields.
 
@@ -22,7 +22,7 @@ object.
 
 ```json
 {
-  "schema": "cube.skill/v2",
+  "schema": "roost.skill/v2",
   "id": "skill.prompt.example_damage",
   "name": "Prompt Example Damage",
   "description": "Deals bounded physical damage to the selected target.",

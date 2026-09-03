@@ -7,14 +7,14 @@ import (
 )
 
 func TestParseLimitsRejectWorkBeforeSemanticDecode(t *testing.T) {
-	if _, err := ParseWithLimits([]byte(`{"schema":"cube.skill/v2"}`), ParseLimits{MaxBytes: 4}); !errors.Is(err, ErrParseLimitExceeded) {
+	if _, err := ParseWithLimits([]byte(`{"schema":"roost.skill/v2"}`), ParseLimits{MaxBytes: 4}); !errors.Is(err, ErrParseLimitExceeded) {
 		t.Fatalf("byte limit error = %v", err)
 	}
 	nested := strings.Repeat("[", 5) + "0" + strings.Repeat("]", 5)
 	if _, err := ParseWithLimits([]byte(nested), ParseLimits{MaxBytes: 1024, MaxDepth: 3}); !errors.Is(err, ErrParseLimitExceeded) {
 		t.Fatalf("depth limit error = %v", err)
 	}
-	if _, err := ParseGeneratedWithLimits([]byte(`{"error":{"code":"UNSUPPORTED_CAPABILITY","message":"toolong"},"schema":"cube.skill/v2"}`), ParseLimits{MaxBytes: 1024, MaxStringBytes: 4}); !errors.Is(err, ErrParseLimitExceeded) {
+	if _, err := ParseGeneratedWithLimits([]byte(`{"error":{"code":"UNSUPPORTED_CAPABILITY","message":"toolong"},"schema":"roost.skill/v2"}`), ParseLimits{MaxBytes: 1024, MaxStringBytes: 4}); !errors.Is(err, ErrParseLimitExceeded) {
 		t.Fatalf("string limit error = %v", err)
 	}
 }

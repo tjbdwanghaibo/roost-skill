@@ -23,7 +23,7 @@ jobs:
       - run: go mod verify
       - run: go vet ./...
       - if: runner.os == 'Linux'
-        run: go run github.com/tjbdwanghaibo/cube-core/cmd/glsvet ./...
+        run: go run github.com/tjbdwanghaibo/roost-core/cmd/glsvet ./...
       - run: go test ./... -count=1
       - if: runner.os == 'Linux'
         run: go test -race ./... -count=1
@@ -38,16 +38,16 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          path: cube-skill
+          path: roost-skill
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version-file: cube-skill/integration/sync-e2e/go.mod
+          go-version-file: roost-skill/integration/sync-e2e/go.mod
           cache-dependency-path: |
-            cube-skill/go.sum
-            cube-skill/integration/sync-e2e/go.sum
-      - working-directory: cube-skill/integration/sync-e2e
+            roost-skill/go.sum
+            roost-skill/integration/sync-e2e/go.sum
+      - working-directory: roost-skill/integration/sync-e2e
         run: go test -race ./... -count=1
-      - working-directory: cube-skill/examples
+      - working-directory: roost-skill/examples
         run: go test ./... -count=1
 
   release-hygiene:
@@ -77,7 +77,7 @@ jobs:
       # manual review.
       - name: docs versions match go.mod
         run: |
-          for dep in cube-core cube-kit; do
+          for dep in roost-core roost-kit; do
             want=$(grep -E "github.com/tjbdwanghaibo/${dep} v" go.mod integration/sync-e2e/go.mod 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sort -u | head -1)
             [ -z "$want" ] && continue
             stale=$(grep -rhoE "${dep} v[0-9]+\.[0-9]+\.[0-9]+" docs/ README.md 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sort -u | grep -vx "$want" || true)

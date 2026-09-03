@@ -83,7 +83,7 @@ func TestPersistentStateTypedReadAndMutationExecuteAcrossCasts(t *testing.T) {
 }
 
 func stateSchemaSkillJSON(state string) string {
-	return `{"schema":"cube.skill/v2","id":"skill.test.state-schema","name":"State","description":"Persistent state.","activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"none"},"cooldown_ticks":0,"costs":[],"memory":{},"persistent_state":` + state + `,"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":{"flow":"finish"}}}]}`
+	return `{"schema":"roost.skill/v2","id":"skill.test.state-schema","name":"State","description":"Persistent state.","activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"none"},"cooldown_ticks":0,"costs":[],"memory":{},"persistent_state":` + state + `,"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":{"flow":"finish"}}}]}`
 }
 
 func TestPersistentStatePrivateIdentityAndOwnerTargetIsolation(t *testing.T) {

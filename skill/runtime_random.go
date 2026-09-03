@@ -8,7 +8,7 @@ import (
 
 func deriveCastRandomKey(seed [32]byte, gameplayDigest string, caster EntityID, sequence uint64) [32]byte {
 	hash := hmac.New(sha256.New, seed[:])
-	writeRandomPart(hash.Write, []byte("cube.skill/v2/cast-random"))
+	writeRandomPart(hash.Write, []byte("roost.skill/v2/cast-random"))
 	writeRandomPart(hash.Write, []byte(gameplayDigest))
 	var number [8]byte
 	binary.BigEndian.PutUint64(number[:], uint64(caster))
@@ -22,7 +22,7 @@ func deriveCastRandomKey(seed [32]byte, gameplayDigest string, caster EntityID, 
 
 func randomCandidateScore(key [32]byte, site RandomSiteIndex, invocation, stableID uint64) [32]byte {
 	hash := hmac.New(sha256.New, key[:])
-	writeRandomPart(hash.Write, []byte("cube.skill/v2/random-site"))
+	writeRandomPart(hash.Write, []byte("roost.skill/v2/random-site"))
 	var number [8]byte
 	binary.BigEndian.PutUint64(number[:], uint64(site))
 	writeRandomPart(hash.Write, number[:])

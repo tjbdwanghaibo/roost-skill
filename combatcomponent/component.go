@@ -1,4 +1,4 @@
-// Package combatcomponent wires the combat content battery into cube-core
+// Package combatcomponent wires the combat content battery into roost-core
 // entities: the CombatDao holds the authoritative combat state behind a
 // dataengine.Tracker, and the CombatComponent exposes mutators that are
 // transaction-safe inside nest handlers — every mutation records its inverse
@@ -16,9 +16,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/tjbdwanghaibo/cube-core/dataengine"
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	"github.com/tjbdwanghaibo/cube-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/nest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/tjbdwanghaibo/roost-skill/combat"

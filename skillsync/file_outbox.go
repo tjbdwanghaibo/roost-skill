@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/syncstream"
+	"github.com/tjbdwanghaibo/roost-core/syncstream"
 )
 
 const fileOutboxVersion uint32 = 1

@@ -7,7 +7,7 @@
 ## 阅读路径
 
 1. 从 `wire_*.go` 和 `parse*.go` 开始：它们定义严格的
-   `cube.skill/v2` JSON 边界，拒绝重复键、未知字段和尾随数据。
+   `roost.skill/v2` JSON 边界，拒绝重复键、未知字段和尾随数据。
 2. 阅读 `compile_normalize.go`、`ir*.go`：这里把 Wire 数据转换为封闭、
    强类型的 IR；不要从 Runtime 反推 JSON 含义。
 3. 阅读 `compile.go` 与各 `compile_*.go`：按固定 Pass 顺序理解 Catalog、
@@ -43,7 +43,7 @@ git diff --check
 ## Fixture 规则
 
 每个 `skill/testdata/*.json` 都必须是独立、直接根的
-`cube.skill/v2` 定义。验收测试会自动发现它们，并执行
+`roost.skill/v2` 定义。验收测试会自动发现它们，并执行
 Parse → Compile → Inspect → Activate → Advance → 终态检查。
 
 新增 Fixture 时要同时：

@@ -26,7 +26,7 @@ func TestParseGeneratedRejectsSkillJSONWrapper(t *testing.T) {
 }
 
 func TestParseGeneratedAcceptsRejection(t *testing.T) {
-	input := `{"schema":"cube.skill/v2","error":{"code":"UNSUPPORTED_CAPABILITY","message":"missing capability","unsupported":["terrain anchor"]}}`
+	input := `{"schema":"roost.skill/v2","error":{"code":"UNSUPPORTED_CAPABILITY","message":"missing capability","unsupported":["terrain anchor"]}}`
 	result, err := ParseGenerated([]byte(input))
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +73,7 @@ func TestParseRejectsNonCanonicalJSON(t *testing.T) {
 		},
 		{
 			name:  "wrong schema",
-			input: strings.Replace(minimalSkillJSON, `cube.skill/v2`, `cube.skill/v3`, 1),
+			input: strings.Replace(minimalSkillJSON, `roost.skill/v2`, `roost.skill/v3`, 1),
 		},
 		{
 			name:  "number encoded as string",
@@ -96,7 +96,7 @@ func TestParseRejectsNonCanonicalJSON(t *testing.T) {
 
 func TestParseRejectsNonCanonicalSelectFields(t *testing.T) {
 	input := `{
-  "schema":"cube.skill/v2",
+  "schema":"roost.skill/v2",
   "id":"skill.test.select",
   "name":"Select",
   "description":"Selects a target.",
@@ -119,7 +119,7 @@ func TestParseRejectsNonCanonicalSelectFields(t *testing.T) {
 
 func TestParseRejectsNonCanonicalEffectResultFields(t *testing.T) {
 	input := `{
-  "schema":"cube.skill/v2",
+  "schema":"roost.skill/v2",
   "id":"skill.test.effect",
   "name":"Effect",
   "description":"Deals damage.",
@@ -143,7 +143,7 @@ func TestParseRejectsNonCanonicalEffectResultFields(t *testing.T) {
 
 func TestParseAcceptsCanonicalSelectConsumersAndEffectResult(t *testing.T) {
 	input := `{
-  "schema":"cube.skill/v2",
+  "schema":"roost.skill/v2",
   "id":"skill.test.canonical",
   "name":"Canonical",
   "description":"Exercises canonical variants.",

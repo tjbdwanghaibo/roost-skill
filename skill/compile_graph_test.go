@@ -26,5 +26,5 @@ func TestCompileRejectsInvalidPhaseGraphs(t *testing.T) {
 }
 
 func phaseSkillJSON(initial, phases string) string {
-	return `{"schema":"cube.skill/v2","id":"skill.test.graph","name":"Graph","description":"Tests graph.","activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"none"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"` + initial + `","phases":` + phases + `}`
+	return `{"schema":"roost.skill/v2","id":"skill.test.graph","name":"Graph","description":"Tests graph.","activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"none"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"` + initial + `","phases":` + phases + `}`
 }

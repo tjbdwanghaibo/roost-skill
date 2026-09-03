@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/tjbdwanghaibo/cube-core/syncstream"
+	"github.com/tjbdwanghaibo/roost-core/syncstream"
 )
 
 func TestSchemaRegistryMigratesDeterministicShortestChain(t *testing.T) {

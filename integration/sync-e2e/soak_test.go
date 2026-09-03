@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	corestream "github.com/tjbdwanghaibo/cube-core/syncstream"
-	streamadapter "github.com/tjbdwanghaibo/cube-kit/syncstream"
+	corestream "github.com/tjbdwanghaibo/roost-core/syncstream"
+	streamadapter "github.com/tjbdwanghaibo/roost-kit/syncstream"
 	"github.com/tjbdwanghaibo/roost-skill/skill"
 	"github.com/tjbdwanghaibo/roost-skill/skillsync"
 )
@@ -14,11 +14,11 @@ import (
 // TestProtocolSoak is opt-in so normal CI remains fast. Production release CI
 // should run it with CUBE_SYNC_SOAK=1 (30 minutes by default).
 func TestProtocolSoak(t *testing.T) {
-	if os.Getenv("CUBE_SYNC_SOAK") != "1" {
+	if os.Getenv("ROOST_SYNC_SOAK") != "1" {
 		t.Skip("set CUBE_SYNC_SOAK=1 to run the protocol soak")
 	}
 	duration := 30 * time.Minute
-	if value := os.Getenv("CUBE_SYNC_SOAK_DURATION"); value != "" {
+	if value := os.Getenv("ROOST_SYNC_SOAK_DURATION"); value != "" {
 		parsed, err := time.ParseDuration(value)
 		if err != nil {
 			t.Fatal(err)

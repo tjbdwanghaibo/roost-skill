@@ -8,7 +8,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/tjbdwanghaibo/cube-core/syncstream"
+	"github.com/tjbdwanghaibo/roost-core/syncstream"
 	"github.com/tjbdwanghaibo/roost-skill/skill"
 )
 

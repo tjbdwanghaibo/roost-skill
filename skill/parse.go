@@ -8,7 +8,7 @@ import (
 	"io"
 )
 
-const SchemaV2 = "cube.skill/v2"
+const SchemaV2 = "roost.skill/v2"
 
 var (
 	errEffectResultBranchesRequired = errors.New("effect result requires success or failure")

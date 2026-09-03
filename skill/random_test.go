@@ -6,7 +6,7 @@ import (
 
 func TestRuntimeRandomSelectionIgnoresCandidateInsertionOrder(t *testing.T) {
 	flow := `{"flow":"sequence","steps":[{"flow":"select","select":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":100},"filters":[{"type":"alive"},{"type":"not_caster"}],"order":{"by":"random","direction":"asc"},"limit":1},"consume":{"mode":"one","as":"enemy","then":{"flow":"effect","effect":{"type":"damage","target":"$local.enemy","amount":1,"damage_type":"physical"}}},"on_empty":{"flow":"finish"}},{"flow":"finish"}]}`
-	json := `{"schema":"cube.skill/v2","id":"skill.test.runtime.random","name":"Runtime","description":"Runtime random.","activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"none"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
+	json := `{"schema":"roost.skill/v2","id":"skill.test.runtime.random","name":"Runtime","description":"Runtime random.","activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"none"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
 	environment := DefaultCompileEnvironment()
 	program, diagnostics := Compile(mustParseJSON(t, json), environment)
 	requireNoErrors(t, diagnostics)

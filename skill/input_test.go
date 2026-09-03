@@ -494,7 +494,7 @@ func TestInputUpdateReplacesOnlyPortFieldAndPreservesCommitState(t *testing.T) {
 func compileInputUpdateSkill(t *testing.T, id, schema, events string, cooldown Tick, costs string) *Program {
 	t.Helper()
 	policy := `{"mode":"hold","pulse_interval_ticks":50,"max_duration_ticks":100,"sustain_costs":[]}`
-	json := `{"schema":"cube.skill/v2","id":"skill.test.input.update.` + id + `","name":"Input Update","description":"Immutable input update.","gameplay_tags":["spell"],"activation":{"type":"active","policy":` + policy + `},"input_schema":` + schema + `,"cooldown_ticks":` + tickString(cooldown) + `,"costs":` + costs + `,"memory":{"counter":{"type":"int","default":0}},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":` + events + `}]}`
+	json := `{"schema":"roost.skill/v2","id":"skill.test.input.update.` + id + `","name":"Input Update","description":"Immutable input update.","gameplay_tags":["spell"],"activation":{"type":"active","policy":` + policy + `},"input_schema":` + schema + `,"cooldown_ticks":` + tickString(cooldown) + `,"costs":` + costs + `,"memory":{"counter":{"type":"int","default":0}},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":` + events + `}]}`
 	program, diagnostics := Compile(mustParseJSON(t, json), DefaultCompileEnvironment())
 	requireNoErrors(t, diagnostics)
 	return program
@@ -542,5 +542,5 @@ func compileInputSkill(t *testing.T, id, schema, events string, environment Comp
 }
 
 func inputSkillJSON(id, schema, events string) string {
-	return `{"schema":"cube.skill/v2","id":"skill.test.input.` + id + `","name":"Input","description":"Typed cast input.","gameplay_tags":["spell"],"activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":` + schema + `,"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":` + events + `}]}`
+	return `{"schema":"roost.skill/v2","id":"skill.test.input.` + id + `","name":"Input","description":"Typed cast input.","gameplay_tags":["spell"],"activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":` + schema + `,"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":` + events + `}]}`
 }

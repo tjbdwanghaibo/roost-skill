@@ -938,7 +938,7 @@ func digestGameplayProgram(program *Program) string {
 	if err != nil {
 		panic(err)
 	}
-	return stableDigest("cube.skill/v2/gameplay-program", payload)
+	return stableDigest("roost.skill/v2/gameplay-program", payload)
 }
 
 func digestPresentationProgram(program *Program, metadata compileMetadata) string {
@@ -949,5 +949,5 @@ func digestPresentationProgram(program *Program, metadata compileMetadata) strin
 	if err != nil {
 		panic(err)
 	}
-	return stableDigest("cube.skill/v2/presentation-program", payload)
+	return stableDigest("roost.skill/v2/presentation-program", payload)
 }

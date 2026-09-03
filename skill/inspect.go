@@ -109,7 +109,7 @@ func InspectVisualManifest(program *Program) SkillVisualManifest {
 		parts = append(parts, entry.Category, entry.Theme)
 		parts = append(parts, entry.Elements...)
 	}
-	return SkillVisualManifest{Digest: digestStrings("cube.skill/v2/visual-manifest", program.visualCatalogRevision+"/"+program.visualCatalogDigest, parts), CatalogRevision: program.visualCatalogRevision, CatalogDigest: program.visualCatalogDigest, Entries: entries}
+	return SkillVisualManifest{Digest: digestStrings("roost.skill/v2/visual-manifest", program.visualCatalogRevision+"/"+program.visualCatalogDigest, parts), CatalogRevision: program.visualCatalogRevision, CatalogDigest: program.visualCatalogDigest, Entries: entries}
 }
 
 func InspectCombatSemantics(program *Program) CombatSemanticView {
