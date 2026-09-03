@@ -9,5 +9,5 @@ require (
 )
 
 // The replacement is confined to this integration-test module: it exists to
-// exercise the working-tree roost-skill against released cube-core/cube-kit.
+// exercise the working-tree roost-skill against released roost-core/roost-kit.
 replace github.com/tjbdwanghaibo/roost-skill => ../..

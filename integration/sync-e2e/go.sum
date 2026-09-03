@@ -1,4 +1,4 @@
-github.com/tjbdwanghaibo/cube-core v1.8.0 h1:LMGZ/ZP7oVd/FMwQyHDK5sncI4+GhUUgykQ0yUUZGXs=
-github.com/tjbdwanghaibo/cube-core v1.8.0/go.mod h1:ZQ8kGbcHmg8ncu3ttObmEo6cMl7NTw7LDf/lU+fW3bc=
-github.com/tjbdwanghaibo/cube-kit v1.8.0 h1:Q8502GG45ODVHOnkO+adRy3zSM76ln3AJMa1G8ZkZWo=
-github.com/tjbdwanghaibo/cube-kit v1.8.0/go.mod h1:DTdQlTPsPh4w6Ikjf0tpc+AkhEo2spu0JySXLRJOXrs=
+github.com/tjbdwanghaibo/roost-core v1.10.0 h1:FM7N4gkw+3ZuOCg1ZDp7kcn14I2gtBrOKW6T90wid5Q=
+github.com/tjbdwanghaibo/roost-core v1.10.0/go.mod h1:H2826BUpQnG2c9CpCuaRjNmvRI0JYrI6jzE2RUgY6qI=
+github.com/tjbdwanghaibo/roost-kit v1.10.0 h1:+Rzbr0JuPvsuV55yCLtRnJedSQpUfJR9HtgCDegC3Io=
+github.com/tjbdwanghaibo/roost-kit v1.10.0/go.mod h1:GHwYhBMjjQoBGZOMZ1hb8Vz2VkXzwxJ9QHcmP084fes=
