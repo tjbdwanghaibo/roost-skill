@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **go 指令 1.25.0 → 1.27.0**（含 `integration/sync-e2e` 子模块），与 roost-core /
+  roost-kit / roost-codegen / roost-service 和 `go.work` 统一。取 1.27.0 而不是最新的
+  1.27.1：一个补丁级的 go 指令什么都买不到，还会让停在 1.27.0 的工具链去下载一个新的。
+
+  留在 1.25.0 已经买不到任何兼容性：roost-core 是 go 1.27.0，而任何用到本仓的项目都
+  会同时用到 core。
+
 ### Added
 - `scripts/pretag.sh`：打 tag 之前的发布预检（tag major 与 module 路径后缀一致、
   tag 未存在、无 replace、工作区干净、`GOWORK=off` 下 build/vet/test 通过）。

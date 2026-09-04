@@ -1,6 +1,6 @@
 module github.com/tjbdwanghaibo/roost-skill/integration/sync-e2e
 
-go 1.25.0
+go 1.27.0
 
 require (
 	github.com/tjbdwanghaibo/roost-core v1.10.0
