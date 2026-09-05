@@ -5,7 +5,7 @@
 - Go 模块：`github.com/tjbdwanghaibo/roost-skill`（自 `v1.5.0` 起可直接 `go get`；不使用 `/v2` major 路径，版本沿 v1.x tag 线演进）
 - 稳定 Go API：`github.com/tjbdwanghaibo/roost-skill/skill`；不再把 wire 版本写进目录名，也不保留 `/skillv2` 兼容包
 - 当前 wire/语义线：JSON schema **`roost.skill/v2`**；编译器语义修订 **`skillv2-compiler-2`**，两者与 Go import 独立演进
-- 依赖基线：`roost-core v1.10.0`；对具体游戏服务器、渲染器、传输层零依赖
+- 依赖基线：`roost-core v1.12.0`；对具体游戏服务器、渲染器、传输层零依赖
 
 第一次接入请先读[稳定 Skill API](docs/skill.md)；完整文档按角色整理在
 [文档导航](docs/README.md)，从旧包升级见
