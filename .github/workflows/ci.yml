@@ -68,7 +68,9 @@ jobs:
         run: |
           test -d skill
           test ! -e skillv2
-          if grep -R "roost-skill/skillv2\|\bskillv2\." --include='*.go' --include='*.yml' --include='*.yaml' .; then
+          # --exclude-dir=.github: this very step spells the pattern out, so the
+          # workflow file matched its own check and every tag since v1.10.0 was red.
+          if grep -R --exclude-dir=.github "roost-skill/skillv2\|\bskillv2\." --include='*.go' --include='*.yml' --include='*.yaml' .; then
             echo "legacy skillv2 Go API reference found"
             exit 1
           fi

@@ -3,8 +3,8 @@ module github.com/tjbdwanghaibo/roost-skill/integration/sync-e2e
 go 1.27.0
 
 require (
-	github.com/tjbdwanghaibo/roost-core v1.10.0
-	github.com/tjbdwanghaibo/roost-kit v1.10.0
+	github.com/tjbdwanghaibo/roost-core v1.12.0
+	github.com/tjbdwanghaibo/roost-kit v1.12.0
 	github.com/tjbdwanghaibo/roost-skill v1.4.0
 )
 
