@@ -1,5 +1,13 @@
 # roost-skill
 
+> **本仓库已归档（2026-09-08）。** 技能框架已并入 roost-core：Go 包从
+> `github.com/tjbdwanghaibo/roost-skill/skill` 迁到 **`github.com/tjbdwanghaibo/roost-core/skill`**
+> （roost-core ≥ v1.14.0），五个包（skill / combat / combatcomponent / skillcompose / skillsync）原样落在
+> `roost-core/skill/…`，文档在 roost-core `docs/skill/`。最后一个独立版本是 **v1.10.3**，仍可 `go get`，
+> 但不再接受修改。已有工程用 roost-codegen ≥ v1.15.0 的 `roost project upgrade --consolidate`
+> 自动改写 import 与 go.mod。收敛方案与决定见 roost-core
+> `docs/ARCHITECTURE_V2_CONSOLIDATION_PLAN.zh-CN.md`。
+
 **roost-skill 是一个 2D 权威（server-authoritative）ARPG 技能框架：JSON 技能定义经过编译器的静态证明，成为不可变 Program，由确定性 Runtime 在单一世界边界接口（Host）之上执行——全程 int64 定点数学、位一致回放。**
 
 - Go 模块：`github.com/tjbdwanghaibo/roost-skill`（自 `v1.5.0` 起可直接 `go get`；不使用 `/v2` major 路径，版本沿 v1.x tag 线演进）
